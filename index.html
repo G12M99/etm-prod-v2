@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETM PROD V2 - Planning de Production</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="header-left">
+                <h1 class="app-title">ETM PROD V2</h1>
+                <p class="app-subtitle">Planning de Production - Atelier de Pliage</p>
+            </div>
+            <div class="header-right">
+                <div class="view-toggle">
+                    <button class="btn btn-toggle active" id="btnVueSemaine">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <rect x="3" y="4" width="4" height="4" fill="currentColor"/>
+                            <rect x="8" y="4" width="4" height="4" fill="currentColor"/>
+                            <rect x="13" y="4" width="4" height="4" fill="currentColor"/>
+                            <rect x="3" y="9" width="4" height="4" fill="currentColor"/>
+                            <rect x="8" y="9" width="4" height="4" fill="currentColor"/>
+                            <rect x="13" y="9" width="4" height="4" fill="currentColor"/>
+                        </svg>
+                        Vue Semaine
+                    </button>
+                    <button class="btn btn-toggle" id="btnVueJournee">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <rect x="3" y="3" width="14" height="2" fill="currentColor"/>
+                            <rect x="3" y="7" width="14" height="2" fill="currentColor"/>
+                            <rect x="3" y="11" width="14" height="2" fill="currentColor"/>
+                            <rect x="3" y="15" width="14" height="2" fill="currentColor"/>
+                        </svg>
+                        Vue Journée
+                    </button>
+                </div>
+                <button class="btn btn-primary" id="btnNewOrder">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    Nouvelle commande
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content-v2">
+        <!-- Sidebar: Commandes non placées -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <h2 class="sidebar-title">Commandes à placer</h2>
+            </div>
+            <div class="sidebar-content" id="unplacedOrdersContainer">
+                <!-- Populated by JavaScript -->
+            </div>
+        </aside>
+
+        <!-- Planning Area -->
+        <div class="planning-area">
+            <!-- Legend -->
+            <div class="legend">
+                <div class="legend-item">
+                    <span class="legend-box legend-cisaillage"></span>
+                    <span class="legend-label">Cisaillage</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-box legend-poinconnage"></span>
+                    <span class="legend-label">Poinçonnage</span>
+                </div>
+                <div class="legend-item">
+                    <span class="legend-box legend-pliage"></span>
+                    <span class="legend-label">Pliage</span>
+                </div>
+                <div class="legend-separator"></div>
+                <div class="legend-item">
+                    <div class="legend-capacity">
+                        <div class="legend-capacity-bar capacity-ok" style="width: 60px;"></div>
+                        <span class="legend-label">0-75%</span>
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-capacity">
+                        <div class="legend-capacity-bar capacity-warning" style="width: 60px;"></div>
+                        <span class="legend-label">76-95%</span>
+                    </div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-capacity">
+                        <div class="legend-capacity-bar capacity-danger" style="width: 60px;"></div>
+                        <span class="legend-label">96-100%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Planning Container -->
+            <div class="planning-wrapper">
+                <div id="planningContainer">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Current Time Indicator -->
+    <div class="time-indicator" id="timeIndicator">
+        <div class="time-info">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="2"/>
+                <path d="M8 4v4l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span id="currentTime">--:--</span>
+        </div>
+    </div>
+
+    <!-- Modal: Order Details -->
+    <div class="modal" id="modalOrderDetails">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Détails de la commande</h2>
+                <button class="btn-close" id="btnCloseDetails">&times;</button>
+            </div>
+            <div class="modal-body" id="orderDetailsContent">
+                <!-- Will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: New Order -->
+    <div class="modal" id="modalNewOrder">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Nouvelle commande</h2>
+                <button class="btn-close" id="btnCloseNewOrder">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="formNewOrder">
+                    <div class="form-group">
+                        <label for="orderId">N° Commande</label>
+                        <input type="text" id="orderId" placeholder="CC25-XXXX" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="orderClient">Client</label>
+                        <input type="text" id="orderClient" placeholder="Nom du client" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="orderDelivery">Date de livraison</label>
+                            <input type="date" id="orderDelivery" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="orderResource">Ressource</label>
+                            <select id="orderResource" required>
+                                <option value="Polyvalent">Polyvalent</option>
+                                <option value="Apprenti">Apprenti</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <h3 class="section-title">Matériau</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="orderMaterial">Type</label>
+                            <select id="orderMaterial" required>
+                                <option value="Aluminium">Aluminium</option>
+                                <option value="Galvanisé">Galvanisé</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="orderWeight">Poids (kg)</label>
+                            <input type="number" id="orderWeight" min="1" step="1" placeholder="100" required>
+                        </div>
+                    </div>
+
+                    <div class="duration-info">
+                        <p><strong>Durées calculées automatiquement selon le poids :</strong></p>
+                        <ul>
+                            <li>Cisaillage : 0.02h/kg</li>
+                            <li>Poinçonnage : 0.015h/kg</li>
+                            <li>Pliage : 0.025h/kg</li>
+                        </ul>
+                        <p class="example">Exemple : 100kg = 2h cisaillage, 1.5h poinçonnage, 2.5h pliage</p>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" id="btnCancelNewOrder">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Créer la commande</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

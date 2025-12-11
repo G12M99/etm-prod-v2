@@ -16,15 +16,22 @@ const ALL_MACHINES = [
 ];
 
 const HOURS_PER_DAY = {
-    'Lundi': 8,
-    'Mardi': 8,
-    'Mercredi': 8,
-    'Jeudi': 8,
-    'Vendredi': 5
+    'Lundi': 8.5,      // 07:30-12:30 (5h) + 13:00-16:30 (3.5h)
+    'Mardi': 8.5,
+    'Mercredi': 8.5,
+    'Jeudi': 8.5,
+    'Vendredi': 5      // 07:00-12:00
 };
 
 const DAYS_OF_WEEK = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
-const TOTAL_HOURS_PER_WEEK = 37; // 8*4 + 5
+const TOTAL_HOURS_PER_WEEK = 39; // 8.5*4 + 5
+
+// Lunch break configuration (Monday-Thursday only)
+const LUNCH_BREAK = {
+    start: '12:30',
+    end: '13:00',
+    duration: 0.5  // 30 minutes
+};
 
 // Calcul de durée par poids de matériau
 const DUREE_PAR_KG = {
@@ -43,8 +50,159 @@ let semaineSelectionnee = 50;
 // Drag and drop state
 let draggedOperation = null;
 
+// Global orders array (loaded from CSV)
+let commandes = [];
+
 // ===================================
-// Demo Data V2 - With Slots
+// CSV Data Source (Embedded)
+// ===================================
+
+const localCsvData = `N° Commande	Client	Date Livraison	Statut	Matériau	Poids (kg)	Ressource	Op 1 Type	Op 1 Durée	Op 1 Machine	Op 1 Semaine	Op 1 Jour	Op 1 Heure Début	Op 1 Progression	Op 1 Statut	Op 2 Type	Op 2 Durée	Op 2 Machine	Op 2 Semaine	Op 2 Jour	Op 2 Heure Début	Op 2 Progression	Op 2 Statut	Op 3 Type	Op 3 Durée	Op 3 Machine	Op 3 Semaine	Op 3 Jour	Op 3 Heure Début	Op 3 Progression	Op 3 Statut
+CC25-1001	SPEBI	2025-12-20	En cours	Aluminium	150	Polyvalent	Cisaillage	03:00:00	Cisaille A	50	Lundi	09:00	75	En cours	Poinçonnage	02:15:00	Poinçonneuse A	50	Mardi	09:00	0	Planifiée	Pliage	03:45:00	Plieuse Lo	50	Mercredi	09:00	0	Planifiée
+CC25-1002	BOUVET	2025-12-18	En cours	Galvanisé	200	Polyvalent	Cisaillage	04:00:00	Cisaille A	50	Lundi	12:00	100	En cours	Poinçonnage	03:00:00	Poinçonneuse B	50	Mardi	09:00	100	En cours	Pliage	05:00:00	Plieuse Mik	51	Lundi	09:00	0	Planifiée
+CC25-1003	ALPAC	2025-12-25	En cours	Aluminium	180	Apprenti	Cisaillage	03:36:00	Cisaille B	50	Mercredi	09:00	50	En cours	Poinçonnage	02:42:00	Poinçonneuse A	50	Jeudi	09:00	0	Planifiée	Pliage	04:30:00	Plieuse Lo	50	Vendredi	09:00	0	Planifiée
+CC25-1004	SOPREMA	2025-12-27	Planifiée	Galvanisé	120	Polyvalent	Cisaillage	02:24:00	Cisaille B	51	Mardi	09:00	0	Planifiée	Poinçonnage	01:48:00	Poinçonneuse B	51	Mercredi	09:00	0	Planifiée	Pliage	03:00:00	Plieuse Mik	51	Jeudi	09:00	0	Planifiée
+CC25-1012	SPEBI	2025-12-25	En prépa	Aluminium	250	Polyvalent	Cisaillage	05:00:00			0		0	Non placée	Poinçonnage	03:45:00			0		0	Non placée	Pliage	06:15:00			0		0	Non placée
+CC25-1013	ALPAC	2025-12-20	En prépa	Galvanisé	100	Apprenti	Cisaillage	02:00:00			0		0	Non placée	Poinçonnage	01:30:00			0		0	Non placée	Pliage	02:30:00			0		0	Non placée
+CC25-1014	GCC HABITAT	2025-12-15	En prépa	Aluminium	300	Polyvalent	Cisaillage	06:00:00			0		0	Non placée	Poinçonnage	04:30:00			0		0	Non placée	Pliage	07:30:00			0		0	Non placée
+CC25-0999	GCC HABITAT	2025-12-05	Livrée	Galvanisé	150	Polyvalent	Cisaillage	03:00:00	Cisaille A	49	Lundi	09:00	100	Terminée	Poinçonnage	02:15:00	Poinçonneuse A	49	Mardi	09:00	100	Terminée	Pliage	03:45:00	Plieuse Lo	49	Mercredi	09:00	100	Terminée
+CC25-1000	SPEBI	2025-12-08	Terminée	Aluminium	200	Polyvalent	Cisaillage	04:00:00	Cisaille B	49	Jeudi	09:00	100	Terminée	Poinçonnage	03:00:00	Poinçonneuse B	49	Vendredi	09:00	100	Terminée	Pliage	05:00:00	Plieuse Mik	50	Lundi	07:00	100	Terminée`;
+
+// ===================================
+// CSV Parsing Functions
+// ===================================
+
+/**
+ * Convert HH:MM:SS time format to decimal hours
+ */
+function timeToDecimalHours(timeStr) {
+    if (!timeStr || timeStr.trim() === '') return 0;
+    const parts = timeStr.split(':');
+    const hours = parseInt(parts[0]) || 0;
+    const minutes = parseInt(parts[1]) || 0;
+    const seconds = parseInt(parts[2]) || 0;
+    return hours + (minutes / 60) + (seconds / 3600);
+}
+
+/**
+ * Parse CSV data and return array of rows
+ */
+function fetchAndParseCSV() {
+    try {
+        const lines = localCsvData.trim().split('\n');
+        const headers = lines[0].split('\t');
+        const rows = [];
+
+        for (let i = 1; i < lines.length; i++) {
+            const values = lines[i].split('\t');
+            const row = {};
+            headers.forEach((header, index) => {
+                row[header] = values[index] || '';
+            });
+            rows.push(row);
+        }
+
+        console.log(`✅ CSV parsed: ${rows.length} rows`);
+        return rows;
+    } catch (error) {
+        console.error('❌ Error parsing CSV:', error);
+        return [];
+    }
+}
+
+/**
+ * Map CSV row to order object
+ */
+function mapSheetRowToOrder(row) {
+    const order = {
+        id: row['N° Commande'],
+        client: row['Client'],
+        dateLivraison: row['Date Livraison'],
+        statut: row['Statut'],
+        materiau: row['Matériau'],
+        poids: parseInt(row['Poids (kg)']) || 0,
+        ressource: row['Ressource'],
+        operations: []
+    };
+
+    // Map 3 operations
+    for (let i = 1; i <= 3; i++) {
+        const opType = row[`Op ${i} Type`];
+        if (!opType) continue;
+
+        const operation = {
+            type: opType,
+            dureeTotal: timeToDecimalHours(row[`Op ${i} Durée`]),
+            progressionReelle: parseInt(row[`Op ${i} Progression`]) || 0,
+            statut: row[`Op ${i} Statut`] || 'Non placée',
+            slots: []
+        };
+
+        // Add slot if machine is specified
+        const machine = row[`Op ${i} Machine`];
+        if (machine && machine.trim() !== '') {
+            const semaine = parseInt(row[`Op ${i} Semaine`]) || 0;
+            const jour = row[`Op ${i} Jour`] || '';
+            const heureDebut = row[`Op ${i} Heure Début`] || '09:00';
+
+            if (semaine > 0 && jour !== '') {
+                const duree = operation.dureeTotal;
+                const startHour = parseInt(heureDebut.split(':')[0]);
+                const startMinute = parseInt(heureDebut.split(':')[1]) || 0;
+                const endHourFloat = startHour + startMinute / 60 + duree;
+                const endHour = Math.floor(endHourFloat);
+                const endMinute = Math.round((endHourFloat - endHour) * 60);
+                const heureFin = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
+
+                const dateDebut = getDateFromWeekDay(semaine, jour, heureDebut);
+                const dateFin = getDateFromWeekDay(semaine, jour, heureFin);
+
+                operation.slots.push({
+                    machine: machine,
+                    duree: duree,
+                    semaine: semaine,
+                    jour: jour,
+                    heureDebut: heureDebut,
+                    heureFin: heureFin,
+                    dateDebut: dateDebut.toISOString().split('.')[0],
+                    dateFin: dateFin.toISOString().split('.')[0]
+                });
+            }
+        }
+
+        order.operations.push(operation);
+    }
+
+    return order;
+}
+
+/**
+ * Load orders from CSV data
+ */
+function loadOrders() {
+    try {
+        const rows = fetchAndParseCSV();
+
+        // Filter active orders (case-insensitive)
+        commandes = rows
+            .map(row => mapSheetRowToOrder(row))
+            .filter(cmd => {
+                const status = cmd.statut.toLowerCase().trim();
+                return status === 'en cours' || status === 'en prépa' || status === 'planifiée';
+            });
+
+        console.log(`✅ Orders loaded: ${commandes.length} active orders`);
+        console.log(`   En cours: ${commandes.filter(c => c.statut.toLowerCase() === 'en cours').length}`);
+        console.log(`   En prépa: ${commandes.filter(c => c.statut.toLowerCase() === 'en prépa').length}`);
+        console.log(`   Planifiée: ${commandes.filter(c => c.statut.toLowerCase() === 'planifiée').length}`);
+    } catch (error) {
+        console.error('❌ Error loading orders:', error);
+        commandes = [];
+    }
+}
+
+// ===================================
+// Legacy Demo Data (kept for reference)
 // ===================================
 
 const commandesDemo = [
@@ -487,30 +645,57 @@ function getWeekDateRange(weekNumber, year = 2025) {
 }
 
 /**
- * Filter active orders
+ * Filter active orders (case-insensitive)
  */
 function getActiveOrders() {
-    return commandesDemo.filter(cmd =>
-        cmd.statut !== "Terminée" && cmd.statut !== "Livrée"
-    );
+    return commandes.filter(cmd => {
+        const status = cmd.statut.toLowerCase().trim();
+        return status !== "terminée" && status !== "livrée";
+    });
 }
 
 /**
  * Get placed orders (with at least one slot)
+ * Includes "En prépa" orders with at least one operation placed
  */
 function getPlacedOrders() {
-    return getActiveOrders().filter(cmd =>
-        cmd.statut !== "Non placée"
-    );
+    return getActiveOrders().filter(cmd => {
+        const status = cmd.statut.toLowerCase().trim();
+
+        // Include "En cours" and "Planifiée"
+        if (status === "en cours" || status === "planifiée") {
+            return true;
+        }
+
+        // Include "En prépa" if at least one operation has slots
+        if (status === "en prépa") {
+            return cmd.operations.some(op => op.slots && op.slots.length > 0);
+        }
+
+        return false;
+    });
 }
 
 /**
  * Get unplaced orders
+ * Includes "En prépa" orders with at least one operation NOT placed
  */
 function getUnplacedOrders() {
-    return getActiveOrders().filter(cmd =>
-        cmd.statut === "Non placée"
-    );
+    return getActiveOrders().filter(cmd => {
+        const status = cmd.statut.toLowerCase().trim();
+
+        // Include "Non placée" orders
+        if (status === "non placée") {
+            return true;
+        }
+
+        // Include "En prépa" if at least one operation has NO slots
+        if (status === "en prépa") {
+            return cmd.operations.some(op => !op.slots || op.slots.length === 0);
+        }
+
+        return false;
+    });
 }
 
 /**
@@ -558,6 +743,76 @@ function getCapacityColorClass(pourcentage) {
     if (pourcentage >= 96) return 'capacity-danger';
     if (pourcentage >= 76) return 'capacity-warning';
     return 'capacity-ok';
+}
+
+/**
+ * Find first available time gap in a day for an operation
+ * Takes into account lunch break (12:30-13:00 Mon-Thu)
+ * @returns {string|null} Start time (HH:MM) or null if no gap found
+ */
+function findFirstAvailableGap(machine, jour, semaine, durationNeeded) {
+    const placedOrders = getPlacedOrders();
+    const capaciteJour = HOURS_PER_DAY[jour];
+
+    // Get all slots for this machine/day/week
+    const slots = placedOrders
+        .flatMap(cmd => cmd.operations)
+        .flatMap(op => op.slots)
+        .filter(slot =>
+            slot.machine === machine &&
+            slot.jour === jour &&
+            slot.semaine === semaine
+        )
+        .sort((a, b) => a.heureDebut.localeCompare(b.heureDebut));
+
+    // Define time boundaries (09:00 to 17:00 or 14:00 for Friday)
+    const startHour = 9;
+    const endHour = jour === 'Vendredi' ? 14 : 17;
+    const totalMinutes = (endHour - startHour) * 60;
+
+    // Create a timeline of busy periods (in minutes from 09:00)
+    const busyPeriods = slots.map(slot => {
+        const startParts = slot.heureDebut.split(':');
+        const endParts = slot.heureFin.split(':');
+        const startMinutes = (parseInt(startParts[0]) - startHour) * 60 + parseInt(startParts[1]);
+        const endMinutes = (parseInt(endParts[0]) - startHour) * 60 + parseInt(endParts[1]);
+        return { start: startMinutes, end: endMinutes };
+    });
+
+    // Add lunch break for Mon-Thu
+    if (jour !== 'Vendredi') {
+        const lunchStartParts = LUNCH_BREAK.start.split(':');
+        const lunchEndParts = LUNCH_BREAK.end.split(':');
+        const lunchStart = (parseInt(lunchStartParts[0]) - startHour) * 60 + parseInt(lunchStartParts[1]);
+        const lunchEnd = (parseInt(lunchEndParts[0]) - startHour) * 60 + parseInt(lunchEndParts[1]);
+        busyPeriods.push({ start: lunchStart, end: lunchEnd });
+        busyPeriods.sort((a, b) => a.start - b.start);
+    }
+
+    // Find first gap that fits the duration
+    const durationMinutes = durationNeeded * 60;
+    let currentTime = 0; // Start at 09:00
+
+    for (const busy of busyPeriods) {
+        const gapSize = busy.start - currentTime;
+        if (gapSize >= durationMinutes) {
+            // Found a gap!
+            const gapStartHour = startHour + Math.floor(currentTime / 60);
+            const gapStartMinute = currentTime % 60;
+            return `${gapStartHour.toString().padStart(2, '0')}:${gapStartMinute.toString().padStart(2, '0')}`;
+        }
+        currentTime = Math.max(currentTime, busy.end);
+    }
+
+    // Check gap at the end
+    const remainingMinutes = totalMinutes - currentTime;
+    if (remainingMinutes >= durationMinutes) {
+        const gapStartHour = startHour + Math.floor(currentTime / 60);
+        const gapStartMinute = currentTime % 60;
+        return `${gapStartHour.toString().padStart(2, '0')}:${gapStartMinute.toString().padStart(2, '0')}`;
+    }
+
+    return null; // No gap found
 }
 
 /**
@@ -1028,6 +1283,7 @@ function renderVueJournee() {
 
 /**
  * Render unplaced orders
+ * Fixed: Issue #4 - Skip cards with no unplaced operations to avoid empty displays
  */
 function renderCommandesNonPlacees() {
     const container = document.getElementById('unplacedOrdersContainer');
@@ -1039,14 +1295,43 @@ function renderCommandesNonPlacees() {
     }
 
     let html = '';
+    let cardsRendered = 0;
+
     unplacedOrders.forEach(cmd => {
         const urgencyLevel = getUrgencyLevel(cmd.dateLivraison);
         const livraison = new Date(cmd.dateLivraison);
         const daysUntil = Math.ceil((livraison - currentTime) / (1000 * 60 * 60 * 24));
 
-        const cisaillage = cmd.operations.find(op => op.type === 'Cisaillage');
-        const poinconnage = cmd.operations.find(op => op.type === 'Poinçonnage');
-        const pliage = cmd.operations.find(op => op.type === 'Pliage');
+        // Build operations HTML for UNPLACED operations only
+        let operationsHtml = '';
+        let hasUnplacedOps = false;
+
+        cmd.operations.forEach(op => {
+            // Only show operations that are NOT placed
+            if (!op.slots || op.slots.length === 0) {
+                hasUnplacedOps = true;
+                const typeClass = op.type.toLowerCase().replace('ç', 'c').replace('é', 'e');
+                operationsHtml += `
+                    <div class="operation-item-sidebar ${typeClass} draggable-from-sidebar"
+                         draggable="true"
+                         data-commande-id="${cmd.id}"
+                         data-operation-type="${op.type}"
+                         data-operation-duration="${op.dureeTotal}"
+                         data-sidebar-operation='${JSON.stringify({ commandeId: cmd.id, operationType: op.type, duration: op.dureeTotal, fromSidebar: true }).replace(/'/g, "&#39;")}'>
+                        <div class="op-icon">⋮⋮</div>
+                        <div class="op-info">
+                            <div class="op-type">${op.type}</div>
+                            <div class="op-duration">${formatHours(op.dureeTotal)}</div>
+                        </div>
+                    </div>
+                `;
+            }
+        });
+
+        // FIXED: Skip card if no unplaced operations (Issue #4)
+        if (!hasUnplacedOps || operationsHtml === '') {
+            return;
+        }
 
         html += `
             <div class="commande-non-placee ${urgencyLevel}">
@@ -1059,14 +1344,14 @@ function renderCommandesNonPlacees() {
                         <strong>Poids:</strong> ${cmd.poids}kg ${cmd.materiau}
                     </div>
                     <div class="detail-item">
-                        <strong>Opérations:</strong>
-                        <span class="op-time cisaillage">Cisaille: ${formatHours(cisaillage.dureeTotal)}</span> |
-                        <span class="op-time poinconnage">Poinçon: ${formatHours(poinconnage.dureeTotal)}</span> |
-                        <span class="op-time pliage">Pliage: ${formatHours(pliage.dureeTotal)}</span>
-                    </div>
-                    <div class="detail-item">
                         <strong>Livraison:</strong> ${formatDate(cmd.dateLivraison)} (${daysUntil} jours)
                         ${urgencyLevel === 'urgente' ? ' ❌ URGENT' : urgencyLevel === 'attention' ? ' ⚠️' : ' ✓'}
+                    </div>
+                    <div class="detail-item">
+                        <strong>Opérations à placer:</strong>
+                        <div class="operations-list-sidebar">
+                            ${operationsHtml}
+                        </div>
                     </div>
                 </div>
                 <div class="commande-actions">
@@ -1079,9 +1364,21 @@ function renderCommandesNonPlacees() {
                 </div>
             </div>
         `;
+        cardsRendered++;
     });
 
-    container.innerHTML = html;
+    // Show message if no cards to display
+    if (cardsRendered === 0) {
+        container.innerHTML = '<p class="no-orders">Aucune opération à placer</p>';
+    } else {
+        container.innerHTML = html;
+
+        // Initialize drag for sidebar operations
+        document.querySelectorAll('.draggable-from-sidebar').forEach(op => {
+            op.addEventListener('dragstart', handleSidebarDragStart);
+            op.addEventListener('dragend', handleDragEnd);
+        });
+    }
 }
 
 // ===================================
@@ -1108,6 +1405,12 @@ function initDragAndDrop() {
 
 function handleDragStart(e) {
     draggedOperation = JSON.parse(e.target.getAttribute('data-operation'));
+    e.target.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+}
+
+function handleSidebarDragStart(e) {
+    draggedOperation = JSON.parse(e.target.getAttribute('data-sidebar-operation'));
     e.target.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
 }
@@ -1140,12 +1443,75 @@ function handleDrop(e) {
 
     if (!draggedOperation) return;
 
+    // Determine start time based on drop zone (or use findFirstAvailableGap)
+    let startHour = 9; // Default
+    if (targetHour) {
+        startHour = parseInt(targetHour);
+    }
+
     // Find the command and operation
-    const cmd = commandesDemo.find(c => c.id === draggedOperation.commandeId);
+    const cmd = commandes.find(c => c.id === draggedOperation.commandeId);
     if (!cmd) return;
 
     const operation = cmd.operations.find(op => op.type === draggedOperation.operationType);
-    if (!operation || operation.slots.length === 0) return;
+    if (!operation) return;
+
+    // CASE 1: Drag from sidebar (new placement)
+    if (draggedOperation.fromSidebar) {
+        // Use findFirstAvailableGap to find best time
+        const bestTime = findFirstAvailableGap(targetMachine, targetDay, targetWeek, operation.dureeTotal);
+
+        if (!bestTime) {
+            alert(`❌ Pas de créneau disponible pour ${operation.type} sur ${targetMachine} - ${targetDay} S${targetWeek}`);
+            refresh();
+            return;
+        }
+
+        const startTime = bestTime;
+        const startTimeParts = startTime.split(':');
+        const startHourCalc = parseInt(startTimeParts[0]) + parseInt(startTimeParts[1]) / 60;
+        const endHourFloat = startHourCalc + operation.dureeTotal;
+        const endHour = Math.floor(endHourFloat);
+        const endMinute = Math.round((endHourFloat - endHour) * 60);
+        const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
+
+        // Validate chronological order
+        const validation = canPlaceOperation(cmd, operation, targetWeek, targetDay, startTime);
+        if (!validation.valid) {
+            alert('⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n' + validation.message);
+            refresh();
+            return;
+        }
+
+        // Create new slot
+        const dateDebut = getDateFromWeekDay(targetWeek, targetDay, startTime);
+        const dateFin = getDateFromWeekDay(targetWeek, targetDay, endTime);
+
+        operation.slots.push({
+            machine: targetMachine,
+            duree: operation.dureeTotal,
+            semaine: targetWeek,
+            jour: targetDay,
+            heureDebut: startTime,
+            heureFin: endTime,
+            dateDebut: dateDebut.toISOString().split('.')[0],
+            dateFin: dateFin.toISOString().split('.')[0]
+        });
+
+        operation.statut = "Planifiée";
+
+        // Update command status if all operations placed
+        const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
+        if (allPlaced) {
+            cmd.statut = "Planifiée";
+        }
+
+        refresh();
+        return;
+    }
+
+    // CASE 2: Drag from planning (move existing slot)
+    if (operation.slots.length === 0) return;
 
     // Trouver le slot spécifique qui est déplacé en utilisant slotId
     const draggedSlotId = draggedOperation.slotId;
@@ -1159,11 +1525,6 @@ function handleDrop(e) {
         return;
     }
 
-    // Determine start time based on drop zone
-    let startHour = 9; // Default
-    if (targetHour) {
-        startHour = parseInt(targetHour);
-    }
     const startTime = `${startHour.toString().padStart(2, '0')}:00`;
 
     // Calculer les nouvelles valeurs AVANT la validation
@@ -1222,9 +1583,10 @@ function handleDrop(e) {
 
 /**
  * Automatically place an order
+ * Uses findFirstAvailableGap() to find optimal placement
  */
 function placerAutomatiquement(commandeId) {
-    const cmd = commandesDemo.find(c => c.id === commandeId);
+    const cmd = commandes.find(c => c.id === commandeId);
     if (!cmd) return;
 
     // 🔒 VALIDATION CRITIQUE: Vérifier que la commande a les 3 opérations dans le bon ordre
@@ -1234,7 +1596,7 @@ function placerAutomatiquement(commandeId) {
         return;
     }
 
-    // For each operation, find the first available slot RESPECTING CHRONOLOGICAL ORDER
+    // For each operation, find the first available gap RESPECTING CHRONOLOGICAL ORDER
     cmd.operations.forEach((operation) => {
         if (operation.slots.length > 0) return; // Already placed
 
@@ -1244,47 +1606,49 @@ function placerAutomatiquement(commandeId) {
         else if (operation.type === 'Poinçonnage') availableMachines = MACHINES.poinconneuses;
         else if (operation.type === 'Pliage') availableMachines = MACHINES.plieuses;
 
-        // Find first available slot that respects chronological order
+        // Find first available gap that respects chronological order
         let placed = false;
         for (let week = 50; week <= 52 && !placed; week++) {
             for (let dayIdx = 0; dayIdx < DAYS_OF_WEEK.length && !placed; dayIdx++) {
                 const day = DAYS_OF_WEEK[dayIdx];
 
                 for (let machine of availableMachines) {
+                    // Find first available gap using smart algorithm
+                    const startTime = findFirstAvailableGap(machine, day, week, operation.dureeTotal);
+
+                    if (!startTime) continue; // No gap available
+
                     // 🔒 VALIDATION: Vérifier que le placement respecte l'ordre CHRONOLOGIQUE
-                    const validation = canPlaceOperation(cmd, operation, week, day, '09:00');
+                    const validation = canPlaceOperation(cmd, operation, week, day, startTime);
                     if (!validation.valid) {
                         continue; // Skip this slot if it violates chronological order
                     }
 
-                    const capacity = calculerCapaciteJour(machine, day, week);
-                    const available = capacity.capaciteJour - capacity.heuresUtilisees;
+                    // Calculate end time
+                    const startParts = startTime.split(':');
+                    const startHourFloat = parseInt(startParts[0]) + parseInt(startParts[1]) / 60;
+                    const endHourFloat = startHourFloat + operation.dureeTotal;
+                    const endHour = Math.floor(endHourFloat);
+                    const endMinute = Math.round((endHourFloat - endHour) * 60);
+                    const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
 
-                    if (available >= operation.dureeTotal) {
-                        // Place here starting at 09:00
-                        const startHour = 9;
-                        const endHour = startHour + operation.dureeTotal;
-                        const startTime = `${startHour.toString().padStart(2, '0')}:00`;
-                        const endTime = `${Math.floor(endHour).toString().padStart(2, '0')}:${Math.round((endHour % 1) * 60).toString().padStart(2, '0')}`;
+                    const startDate = getDateFromWeekDay(week, day, startTime);
+                    const endDate = getDateFromWeekDay(week, day, endTime);
 
-                        const startDate = getDateFromWeekDay(week, day, startTime);
-                        const endDate = getDateFromWeekDay(week, day, endTime);
+                    operation.slots.push({
+                        machine: machine,
+                        duree: operation.dureeTotal,
+                        semaine: week,
+                        jour: day,
+                        heureDebut: startTime,
+                        heureFin: endTime,
+                        dateDebut: startDate.toISOString().split('.')[0],
+                        dateFin: endDate.toISOString().split('.')[0]
+                    });
 
-                        operation.slots.push({
-                            machine: machine,
-                            duree: operation.dureeTotal,
-                            semaine: week,
-                            jour: day,
-                            heureDebut: startTime,
-                            heureFin: endTime,
-                            dateDebut: startDate.toISOString().split('.')[0],
-                            dateFin: endDate.toISOString().split('.')[0]
-                        });
-
-                        operation.statut = "Planifiée";
-                        placed = true;
-                        break;
-                    }
+                    operation.statut = "Planifiée";
+                    placed = true;
+                    break;
                 }
             }
         }
@@ -1305,7 +1669,7 @@ function placerAutomatiquement(commandeId) {
  * Show command details
  */
 function showCommandeDetails(commandeId) {
-    const cmd = commandesDemo.find(c => c.id === commandeId);
+    const cmd = commandes.find(c => c.id === commandeId);
     if (!cmd) return;
 
     const modal = document.getElementById('modalOrderDetails');
@@ -1468,7 +1832,11 @@ function initEventHandlers() {
 function init() {
     console.log('🏭 ETM PROD V2 - Planning de Production');
     console.log(`📅 Date de référence: ${currentTime.toLocaleString('fr-FR')}`);
-    console.log(`✅ Commandes actives: ${getActiveOrders().length}/${commandesDemo.length}`);
+
+    // Load orders from CSV
+    loadOrders();
+
+    console.log(`✅ Commandes actives: ${getActiveOrders().length}/${commandes.length}`);
     console.log(`📦 Commandes placées: ${getPlacedOrders().length}`);
     console.log(`⏳ Commandes non placées: ${getUnplacedOrders().length}`);
 

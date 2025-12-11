@@ -73,15 +73,45 @@ CC25-1000	SPEBI	2025-12-08	Terminée	Aluminium	200	Polyvalent	Cisaillage	04:00:0
 // ===================================
 
 /**
- * Convert HH:MM:SS time format to decimal hours
+ * Convert HH:MM:SS time format (or Date object, or Excel serial number) to decimal hours
  */
 function timeToDecimalHours(timeStr) {
-    if (!timeStr || timeStr.trim() === '') return 0;
-    const parts = timeStr.split(':');
-    const hours = parseInt(parts[0]) || 0;
-    const minutes = parseInt(parts[1]) || 0;
-    const seconds = parseInt(parts[2]) || 0;
-    return hours + (minutes / 60) + (seconds / 3600);
+    if (timeStr === null || timeStr === undefined || timeStr === '') return 0;
+
+    // Handle Google Sheet Date objects (often returned for times)
+    if (timeStr instanceof Date) {
+        // If it's a full date, we just want the time part relative to midnight?
+        // Or is it a duration? Google Sheets passes "1899-12-30T..." for durations.
+        // We extract Hours + Minutes + Seconds.
+        return timeStr.getHours() + (timeStr.getMinutes() / 60) + (timeStr.getSeconds() / 3600);
+    }
+
+    // Handle string format "HH:MM:SS"
+    if (typeof timeStr === 'string') {
+        const parts = timeStr.trim().split(':');
+        if (parts.length === 0) return 0;
+        const hours = parseInt(parts[0]) || 0;
+        const minutes = parseInt(parts[1]) || 0;
+        const seconds = parseInt(parts[2]) || 0;
+        return hours + (minutes / 60) + (seconds / 3600);
+    }
+
+    // Handle Excel Serial Number (e.g. 0.5 = 12:00, 1.0 = 24h)
+    // If it's a number < 24, it might be hours already? No, safer to assume serial day fraction for Google Sheets.
+    // BUT sometimes user puts "2" for 2 hours.
+    // Heuristic: If < 1, treat as day fraction. If >= 1, treat as hours?
+    // Let's assume day fraction which is standard for "Time" format.
+    // Wait, 19:47:30 as serial is ~0.82.
+    if (typeof timeStr === 'number') {
+        // If it's a small float, likely a day fraction
+        if (timeStr < 1) {
+            return timeStr * 24;
+        }
+        // If it looks like hours (e.g. 3.5), return as is
+        return timeStr;
+    }
+
+    return 0;
 }
 
 /**
@@ -111,7 +141,57 @@ function fetchAndParseCSV() {
 }
 
 /**
- * Map CSV row to order object
+ * Map Google Sheet row (Simplified Format) to order object
+ * Input Columns: Fin de Prod, Code cde, STATUT, Client, Poids, CISAILLE, POINCON, PLIAGE
+ */
+function mapGoogleSheetRowToOrder(row) {
+    // 1. Map basic fields
+    const order = {
+        id: row['Code cde'] || 'N/A',
+        client: row['Client'] || 'Inconnu',
+        dateLivraison: row['Fin de Prod'] || '', // Date parsing might be needed if format varies
+        statut: row['STATUT'] || 'Non placée',
+        materiau: 'Inconnu', // Not in new sheet, default value
+        poids: parseInt(row['Poids']) || 0,
+        ressource: 'Polyvalent', // Default
+        operations: []
+    };
+
+    // 2. Create Operations based on columns CISAILLE, POINCON, PLIAGE
+    const opTypes = [
+        { key: 'CISAILLE', type: 'Cisaillage' },
+        { key: 'POINCON', type: 'Poinçonnage' },
+        { key: 'PLIAGE', type: 'Pliage' }
+    ];
+
+    opTypes.forEach(opConfig => {
+        const durationStr = row[opConfig.key];
+        const duration = timeToDecimalHours(durationStr);
+
+        // Only add operation if duration > 0
+        if (duration > 0) {
+            order.operations.push({
+                type: opConfig.type,
+                dureeTotal: duration,
+                progressionReelle: 0, // No progress data in sheet
+                statut: 'Non placée', // Default to unplaced since no slot data
+                slots: [] // No slot data in this simplified sheet
+            });
+        }
+    });
+
+    // 3. Status Mapping normalization
+    // Ensure status matches app conventions (En cours, Planifiée, etc.)
+    // If "Livré" or "Terminée", they might be filtered out later, but map them correctly.
+    if (order.statut.toLowerCase() === 'en cours') order.statut = 'En cours';
+    if (order.statut.toLowerCase() === 'planifiée') order.statut = 'Planifiée';
+    if (order.statut.toLowerCase() === 'en prépa') order.statut = 'En prépa';
+
+    return order;
+}
+
+/**
+ * Map CSV row to order object (Legacy - kept for reference or fallback)
  */
 function mapSheetRowToOrder(row) {
     const order = {
@@ -176,10 +256,77 @@ function mapSheetRowToOrder(row) {
     return order;
 }
 
+// ===================================
+// Data Loading
+// ===================================
+
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw_O3_yBaQJ6QzcJc5bNaEANnqywL__MJvLdFN2ktZS7fE8iajUaSpTWEz4K29HBLTe/exec';
+
 /**
- * Load orders from CSV data
+ * Fetch orders from Google Apps Script
  */
-function loadOrders() {
+async function fetchOrdersFromGoogleSheet() {
+    if (GOOGLE_SCRIPT_URL === 'YOUR_GOOGLE_SCRIPT_URL_HERE') {
+        console.warn('⚠️ Google Script URL not set. Using local demo data.');
+        loadLocalOrders();
+        return;
+    }
+
+    try {
+        const response = await fetch(GOOGLE_SCRIPT_URL);
+        
+        // Read text first to debug if it's not JSON
+        const responseText = await response.text();
+        
+        if (!response.ok) {
+            throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
+        }
+
+        // Check if response is HTML (error page) instead of JSON
+        if (responseText.trim().startsWith('<')) {
+            console.error('❌ Google Script returned HTML instead of JSON. Likely an auth/permission issue.');
+            console.error('Check: Deploy as "Me", Access: "Anyone".');
+            console.debug('Response preview:', responseText.substring(0, 500));
+            throw new Error('Invalid JSON response (HTML received)');
+        }
+        
+        const jsonResponse = JSON.parse(responseText);
+        
+        // Handle different JSON structures (Array vs Object with data property)
+        let data = [];
+        if (Array.isArray(jsonResponse)) {
+            data = jsonResponse;
+        } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
+            data = jsonResponse.data;
+        } else {
+            console.error('❌ Unexpected JSON structure:', Object.keys(jsonResponse));
+            throw new Error('JSON response does not contain an array of data');
+        }
+
+        console.log(`✅ Data fetched from Google Sheet: ${data.length} rows`);
+
+        commandes = data
+            .map(row => mapGoogleSheetRowToOrder(row))
+            .filter(cmd => {
+                // Filter logic similar to legacy
+                const status = cmd.statut ? cmd.statut.toLowerCase().trim() : '';
+                return status === 'en cours' || status === 'en prépa' || status === 'planifiée';
+            });
+
+        console.log(`✅ Orders loaded (Live): ${commandes.length} active orders`);
+        refresh();
+
+    } catch (error) {
+        console.error('❌ Error fetching from Google Sheet:', error);
+        console.log('⚠️ Falling back to local data.');
+        loadLocalOrders();
+    }
+}
+
+/**
+ * Load orders from local CSV (Legacy/Fallback)
+ */
+function loadLocalOrders() {
     try {
         const rows = fetchAndParseCSV();
 
@@ -191,14 +338,19 @@ function loadOrders() {
                 return status === 'en cours' || status === 'en prépa' || status === 'planifiée';
             });
 
-        console.log(`✅ Orders loaded: ${commandes.length} active orders`);
-        console.log(`   En cours: ${commandes.filter(c => c.statut.toLowerCase() === 'en cours').length}`);
-        console.log(`   En prépa: ${commandes.filter(c => c.statut.toLowerCase() === 'en prépa').length}`);
-        console.log(`   Planifiée: ${commandes.filter(c => c.statut.toLowerCase() === 'planifiée').length}`);
+        console.log(`✅ Orders loaded (Local): ${commandes.length} active orders`);
     } catch (error) {
-        console.error('❌ Error loading orders:', error);
+        console.error('❌ Error loading local orders:', error);
         commandes = [];
     }
+}
+
+/**
+ * Main load function
+ */
+function loadOrders() {
+    // Attempt to fetch from web first
+    fetchOrdersFromGoogleSheet();
 }
 
 // ===================================

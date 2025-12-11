@@ -67,10 +67,10 @@ const commandesDemo = [
                         duree: 3,
                         semaine: 50,
                         jour: "Lundi",
-                        heureDebut: "07:00",
-                        heureFin: "10:00",
-                        dateDebut: "2025-12-09T07:00:00",
-                        dateFin: "2025-12-09T10:00:00"
+                        heureDebut: "09:00",
+                        heureFin: "12:00",
+                        dateDebut: "2025-12-08T08:00:00",
+                        dateFin: "2025-12-08T11:00:00"
                     }
                 ],
                 progressionReelle: 75,
@@ -85,10 +85,10 @@ const commandesDemo = [
                         duree: 2.25,
                         semaine: 50,
                         jour: "Mardi",
-                        heureDebut: "07:00",
-                        heureFin: "09:15",
-                        dateDebut: "2025-12-10T07:00:00",
-                        dateFin: "2025-12-10T09:15:00"
+                        heureDebut: "09:00",
+                        heureFin: "11:15",
+                        dateDebut: "2025-12-09T08:00:00",
+                        dateFin: "2025-12-09T10:15:00"
                     }
                 ],
                 progressionReelle: 0,
@@ -103,10 +103,10 @@ const commandesDemo = [
                         duree: 3.75,
                         semaine: 50,
                         jour: "Mercredi",
-                        heureDebut: "07:00",
-                        heureFin: "10:45",
-                        dateDebut: "2025-12-11T07:00:00",
-                        dateFin: "2025-12-11T10:45:00"
+                        heureDebut: "09:00",
+                        heureFin: "12:45",
+                        dateDebut: "2025-12-10T08:00:00",
+                        dateFin: "2025-12-10T11:45:00"
                     }
                 ],
                 progressionReelle: 0,
@@ -132,20 +132,20 @@ const commandesDemo = [
                         duree: 2,
                         semaine: 50,
                         jour: "Lundi",
-                        heureDebut: "10:00",
-                        heureFin: "12:00",
-                        dateDebut: "2025-12-09T10:00:00",
-                        dateFin: "2025-12-09T12:00:00"
+                        heureDebut: "12:00",
+                        heureFin: "14:00",
+                        dateDebut: "2025-12-08T11:00:00",
+                        dateFin: "2025-12-08T13:00:00"
                     },
                     {
                         machine: "Cisaille A",
                         duree: 2,
                         semaine: 50,
                         jour: "Lundi",
-                        heureDebut: "13:00",
-                        heureFin: "15:00",
-                        dateDebut: "2025-12-09T13:00:00",
-                        dateFin: "2025-12-09T15:00:00"
+                        heureDebut: "14:00",
+                        heureFin: "16:00",
+                        dateDebut: "2025-12-08T13:00:00",
+                        dateFin: "2025-12-08T15:00:00"
                     }
                 ],
                 progressionReelle: 100,
@@ -160,10 +160,10 @@ const commandesDemo = [
                         duree: 3,
                         semaine: 50,
                         jour: "Mardi",
-                        heureDebut: "07:00",
-                        heureFin: "10:00",
-                        dateDebut: "2025-12-10T07:00:00",
-                        dateFin: "2025-12-10T10:00:00"
+                        heureDebut: "09:00",
+                        heureFin: "12:00",
+                        dateDebut: "2025-12-09T08:00:00",
+                        dateFin: "2025-12-09T11:00:00"
                     }
                 ],
                 progressionReelle: 100,
@@ -178,10 +178,10 @@ const commandesDemo = [
                         duree: 5,
                         semaine: 51,
                         jour: "Lundi",
-                        heureDebut: "07:00",
-                        heureFin: "12:00",
-                        dateDebut: "2025-12-16T07:00:00",
-                        dateFin: "2025-12-16T12:00:00"
+                        heureDebut: "09:00",
+                        heureFin: "14:00",
+                        dateDebut: "2025-12-15T08:00:00",
+                        dateFin: "2025-12-15T13:00:00"
                     }
                 ],
                 progressionReelle: 0,
@@ -207,10 +207,10 @@ const commandesDemo = [
                         duree: 3.6,
                         semaine: 50,
                         jour: "Mercredi",
-                        heureDebut: "07:00",
-                        heureFin: "10:36",
-                        dateDebut: "2025-12-11T07:00:00",
-                        dateFin: "2025-12-11T10:36:00"
+                        heureDebut: "09:00",
+                        heureFin: "12:36",
+                        dateDebut: "2025-12-11T09:00:00",
+                        dateFin: "2025-12-11T12:36:00"
                     }
                 ],
                 progressionReelle: 50,
@@ -225,10 +225,10 @@ const commandesDemo = [
                         duree: 2.7,
                         semaine: 50,
                         jour: "Jeudi",
-                        heureDebut: "07:00",
-                        heureFin: "09:42",
-                        dateDebut: "2025-12-12T07:00:00",
-                        dateFin: "2025-12-12T09:42:00"
+                        heureDebut: "09:00",
+                        heureFin: "11:42",
+                        dateDebut: "2025-12-12T09:00:00",
+                        dateFin: "2025-12-12T11:42:00"
                     }
                 ],
                 progressionReelle: 0,
@@ -243,10 +243,10 @@ const commandesDemo = [
                         duree: 4.5,
                         semaine: 50,
                         jour: "Vendredi",
-                        heureDebut: "07:00",
-                        heureFin: "11:30",
-                        dateDebut: "2025-12-13T07:00:00",
-                        dateFin: "2025-12-13T11:30:00"
+                        heureDebut: "09:00",
+                        heureFin: "13:30",
+                        dateDebut: "2025-12-13T09:00:00",
+                        dateFin: "2025-12-13T13:30:00"
                     }
                 ],
                 progressionReelle: 0,
@@ -272,10 +272,10 @@ const commandesDemo = [
                         duree: 2.4,
                         semaine: 51,
                         jour: "Mardi",
-                        heureDebut: "07:00",
-                        heureFin: "09:24",
-                        dateDebut: "2025-12-17T07:00:00",
-                        dateFin: "2025-12-17T09:24:00"
+                        heureDebut: "09:00",
+                        heureFin: "11:24",
+                        dateDebut: "2025-12-17T09:00:00",
+                        dateFin: "2025-12-17T11:24:00"
                     }
                 ],
                 progressionReelle: 0,
@@ -290,10 +290,10 @@ const commandesDemo = [
                         duree: 1.8,
                         semaine: 51,
                         jour: "Mercredi",
-                        heureDebut: "07:00",
-                        heureFin: "08:48",
-                        dateDebut: "2025-12-18T07:00:00",
-                        dateFin: "2025-12-18T08:48:00"
+                        heureDebut: "09:00",
+                        heureFin: "10:48",
+                        dateDebut: "2025-12-18T09:00:00",
+                        dateFin: "2025-12-18T10:48:00"
                     }
                 ],
                 progressionReelle: 0,
@@ -308,10 +308,10 @@ const commandesDemo = [
                         duree: 3,
                         semaine: 51,
                         jour: "Jeudi",
-                        heureDebut: "07:00",
-                        heureFin: "10:00",
-                        dateDebut: "2025-12-19T07:00:00",
-                        dateFin: "2025-12-19T10:00:00"
+                        heureDebut: "09:00",
+                        heureFin: "12:00",
+                        dateDebut: "2025-12-19T09:00:00",
+                        dateFin: "2025-12-19T12:00:00"
                     }
                 ],
                 progressionReelle: 0,
@@ -593,6 +593,170 @@ function formatHours(hours) {
 }
 
 // ===================================
+// 🔒 ORDRE CHRONOLOGIQUE - RÈGLE CRITIQUE
+// ===================================
+// ORDRE CHRONOLOGIQUE OBLIGATOIRE: Cisaille → Poinçon → Pliage
+// Les opérations peuvent être PLACÉES dans n'importe quel ordre
+// MAIS dans le planning, Cisaille doit SE TERMINER avant Poinçonnage,
+// et Poinçonnage doit SE TERMINER avant Pliage
+
+/**
+ * 🔒 RÈGLE CRITIQUE: Valide l'ordre strict des opérations
+ * @param {Object} commande - La commande à valider
+ * @returns {Object} { valid: boolean, message: string }
+ */
+function validateOperationOrder(commande) {
+    const operations = commande.operations;
+
+    // Vérifier que les 3 opérations existent
+    const cisaillage = operations.find(op => op.type === 'Cisaillage');
+    const poinconnage = operations.find(op => op.type === 'Poinçonnage');
+    const pliage = operations.find(op => op.type === 'Pliage');
+
+    if (!cisaillage || !poinconnage || !pliage) {
+        return {
+            valid: false,
+            message: 'La commande doit avoir les 3 opérations obligatoires:\n- Cisaillage\n- Poinçonnage\n- Pliage'
+        };
+    }
+
+    // Vérifier l'ordre des opérations dans le tableau
+    const cisailleIndex = operations.indexOf(cisaillage);
+    const poinconIndex = operations.indexOf(poinconnage);
+    const pliageIndex = operations.indexOf(pliage);
+
+    if (cisailleIndex > poinconIndex || poinconIndex > pliageIndex) {
+        return {
+            valid: false,
+            message: '⛔ ORDRE DE PRODUCTION INVALIDE\n\nL\'ordre des opérations doit être:\n1. Cisaillage\n2. Poinçonnage\n3. Pliage\n\n❌ Aucune inversion n\'est autorisée!'
+        };
+    }
+
+    return { valid: true, message: '' };
+}
+
+/**
+ * 🔒 RÈGLE CRITIQUE: Vérifie si une opération peut être placée à une date donnée
+ * L'ordre CHRONOLOGIQUE doit être respecté: Cisaillage → Poinçonnage → Pliage
+ * Mais on peut placer les opérations dans n'importe quel ordre (ex: placer Pliage avant Cisaillage)
+ * @param {Object} commande - La commande
+ * @param {Object} operation - L'opération à placer
+ * @param {number} targetWeek - Semaine cible
+ * @param {string} targetDay - Jour cible
+ * @param {string} targetStartTime - Heure de début (optionnel, par défaut '09:00')
+ * @returns {Object} { valid: boolean, message: string }
+ */
+function canPlaceOperation(commande, operation, targetWeek, targetDay, targetStartTime = '09:00') {
+    const operations = commande.operations;
+    const operationIndex = operations.indexOf(operation);
+
+    if (operationIndex === -1) {
+        return { valid: false, message: 'Opération non trouvée dans la commande' };
+    }
+
+    // Calculer la date de début cible
+    const targetStartDate = getDateFromWeekDay(targetWeek, targetDay, targetStartTime);
+
+    // Calculer la date de fin approximative (on utilisera la durée de l'opération)
+    const targetEndDate = new Date(targetStartDate);
+    targetEndDate.setHours(targetEndDate.getHours() + operation.dureeTotal);
+
+    // 🔒 RÈGLE 1: Si l'opération PRÉCÉDENTE est placée, elle doit SE TERMINER AVANT le début de celle-ci
+    if (operationIndex > 0) {
+        const previousOp = operations[operationIndex - 1];
+
+        if (previousOp.slots && previousOp.slots.length > 0) {
+            // Trouver la date de fin de la dernière slot de l'opération précédente
+            const previousLastSlot = previousOp.slots[previousOp.slots.length - 1];
+            const previousEndDate = new Date(previousLastSlot.dateFin || getDateFromWeekDay(previousLastSlot.semaine, previousLastSlot.jour, previousLastSlot.heureFin));
+
+
+            // Comparaison stricte: début actuel doit être >= fin précédente
+            if (targetStartDate < previousEndDate) {
+                // Calculer l'écart de temps
+                const timeDiff = Math.round((previousEndDate - targetStartDate) / (1000 * 60)); // en minutes
+
+                // Calculer l'heure suggérée (arrondie à l'heure supérieure complète)
+                const endHourFloat = parseInt(previousLastSlot.heureFin.split(':')[0]) + parseInt(previousLastSlot.heureFin.split(':')[1]) / 60;
+                const suggestedHour = Math.ceil(endHourFloat);
+                const suggestedTime = `${suggestedHour.toString().padStart(2, '0')}:00`;
+
+                return {
+                    valid: false,
+                    message: `⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n"${operation.type}" ne peut pas commencer AVANT la fin de "${previousOp.type}"\n\n📅 ${previousOp.type} se termine:\n   → S${previousLastSlot.semaine} ${previousLastSlot.jour} à ${previousLastSlot.heureFin}\n\n📅 ${operation.type} commence:\n   → S${targetWeek} ${targetDay} à ${targetStartTime}\n\n⏰ Conflit: ${timeDiff} minutes de chevauchement\n\n💡 Solution: Placez "${operation.type}" à partir de ${suggestedTime} (heure complète suivante)\n\n❌ Respectez l'ordre chronologique dans le planning!`
+                };
+            }
+        }
+    }
+
+    // 🔒 RÈGLE 2: Si l'opération SUIVANTE est placée, celle-ci doit SE TERMINER AVANT son début
+    if (operationIndex < operations.length - 1) {
+        const nextOp = operations[operationIndex + 1];
+
+        if (nextOp.slots && nextOp.slots.length > 0) {
+            // Trouver la date de début de la première slot de l'opération suivante
+            const nextFirstSlot = nextOp.slots[0];
+            const nextStartDate = new Date(nextFirstSlot.dateDebut || getDateFromWeekDay(nextFirstSlot.semaine, nextFirstSlot.jour, nextFirstSlot.heureDebut));
+
+            // Comparaison stricte: fin actuelle doit être <= début suivante
+            if (targetEndDate > nextStartDate) {
+                // Calculer l'heure de fin estimée
+                const endHour = parseInt(targetStartTime.split(':')[0]) + Math.floor(operation.dureeTotal);
+                const endMinute = Math.round((operation.dureeTotal % 1) * 60);
+                const estimatedEndTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
+
+                // Calculer l'écart de temps
+                const timeDiff = Math.round((targetEndDate - nextStartDate) / (1000 * 60)); // en minutes
+
+                // Calculer l'heure de début maximale (en arrondissant vers le bas)
+                // Il faut que cette opération se termine avant nextStart
+                const nextStartHour = parseInt(nextFirstSlot.heureDebut.split(':')[0]) + parseInt(nextFirstSlot.heureDebut.split(':')[1]) / 60;
+                const maxStartHour = Math.floor(nextStartHour - operation.dureeTotal);
+                const suggestedMaxTime = maxStartHour >= 9 ? `${maxStartHour.toString().padStart(2, '0')}:00` : 'impossible ce jour';
+
+                return {
+                    valid: false,
+                    message: `⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n"${operation.type}" doit SE TERMINER AVANT le début de "${nextOp.type}"\n\n📅 ${operation.type} se termine:\n   → S${targetWeek} ${targetDay} à ${estimatedEndTime} (estimé)\n\n📅 ${nextOp.type} commence:\n   → S${nextFirstSlot.semaine} ${nextFirstSlot.jour} à ${nextFirstSlot.heureDebut}\n\n⏰ Conflit: ${timeDiff} minutes de chevauchement\n\n💡 Solution: Placez "${operation.type}" au plus tard à ${suggestedMaxTime}\n\n❌ Respectez l'ordre chronologique dans le planning!`
+                };
+            }
+        }
+    }
+
+    return { valid: true, message: '' };
+}
+
+/**
+ * Helper: Convertir semaine/jour/heure en Date
+ */
+function getDateFromWeekDay(weekNumber, dayName, timeStr) {
+    const year = 2025;
+    const simple = new Date(year, 0, 1 + (weekNumber - 1) * 7);
+    const dow = simple.getDay();
+    const ISOweekStart = new Date(simple);
+    if (dow <= 4)
+        ISOweekStart.setDate(simple.getDate() - simple.getDay() + 1);
+    else
+        ISOweekStart.setDate(simple.getDate() + 8 - simple.getDay());
+
+    const dayIndex = DAYS_OF_WEEK.indexOf(dayName);
+    const targetDate = new Date(ISOweekStart);
+    targetDate.setDate(ISOweekStart.getDate() + dayIndex);
+
+    const [hours, minutes] = timeStr.split(':');
+    targetDate.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+
+    return targetDate;
+}
+
+/**
+ * Helper: Obtenir toutes les opérations d'une commande
+ */
+function getCommandeOperations(commandeId) {
+    const cmd = commandesDemo.find(c => c.id === commandeId);
+    return cmd ? cmd.operations : [];
+}
+
+// ===================================
 // UI Rendering - Vue Semaine
 // ===================================
 
@@ -660,7 +824,12 @@ function renderVueSemaine() {
             html += `<div class="week-cell ${weekSeparatorClass}" data-machine="${machine}" data-week="${week}">`;
 
             commandsInWeek.forEach(cmd => {
-                html += `<span class="command-badge" title="${cmd.client}">${cmd.id.substring(5)}</span>`;
+                html += `
+                    <span class="command-badge">
+                        <span class="badge-id">${cmd.id.substring(5)}</span>
+                        <span class="badge-client">${cmd.client}</span>
+                    </span>
+                `;
             });
 
             html += '</div>';
@@ -728,18 +897,19 @@ function renderVueJournee() {
 
         html += `<div class="machine-cell"><div class="machine-name">${machine}</div></div>`;
 
-        // Day cells
+        // Day cells with hourly time slots
         DAYS_OF_WEEK.forEach(day => {
             const capacityInfo = calculerCapaciteJour(machine, day, semaineSelectionnee);
             const capacityClass = getCapacityColorClass(capacityInfo.pourcentage);
             const isOverCapacity = capacityInfo.heuresUtilisees > capacityInfo.capaciteJour;
+            const maxHour = day === 'Vendredi' ? 14 : 17;
 
             html += `
-                <div class="day-cell ${day === 'Vendredi' ? 'friday' : ''} drop-zone"
+                <div class="day-cell ${day === 'Vendredi' ? 'friday' : ''}"
                      data-machine="${machine}"
                      data-day="${day}"
                      data-week="${semaineSelectionnee}">
-                    <div class="day-slots">
+                    <div class="day-timeline">
             `;
 
             // Get slots for this machine/day
@@ -766,25 +936,73 @@ function renderVueJournee() {
             // Sort by heureDebut
             slots.sort((a, b) => a.heureDebut.localeCompare(b.heureDebut));
 
-            // Render slots
+            // Create a container with absolute positioning for the timeline
+            html += '<div class="timeline-container">';
+
+            // Create hourly time grid (background - 09:00 to 17:00 or 14:00)
+            html += '<div class="time-grid">';
+            for (let hour = 9; hour < maxHour; hour++) {
+                const timeSlot = `${hour.toString().padStart(2, '0')}:00`;
+                html += `
+                    <div class="time-slot drop-zone"
+                         data-machine="${machine}"
+                         data-day="${day}"
+                         data-week="${semaineSelectionnee}"
+                         data-hour="${hour}">
+                        <div class="time-label">${timeSlot}</div>
+                    </div>
+                `;
+            }
+            html += '</div>';
+
+            // Overlay operations with absolute positioning
+            html += '<div class="operations-overlay">';
             slots.forEach(slot => {
+                const startHour = parseInt(slot.heureDebut.split(':')[0]);
+                const startMinute = parseInt(slot.heureDebut.split(':')[1]);
+
+                // Calculate position from top (9:00 = 0px)
+                const startOffsetHours = startHour - 9 + (startMinute / 60);
+                const topPosition = startOffsetHours * 60; // 60px per hour
+
+                // Calculate height
+                const durationInHours = slot.duree;
+                const heightInPixels = durationInHours * 60;
+
                 const typeClass = slot.operationType.toLowerCase().replace('ç', 'c').replace('é', 'e');
+
+                // Créer un identifiant unique pour ce slot
+                const slotId = `${slot.semaine}_${slot.jour}_${slot.heureDebut}`;
+
                 html += `
                     <div class="operation-slot ${typeClass} draggable"
                          draggable="true"
-                         data-operation='${JSON.stringify({ commandeId: slot.commandeId, operationType: slot.operationType }).replace(/'/g, "&#39;")}'>
-                        <div class="slot-time">${slot.heureDebut}</div>
-                        <div class="slot-label">[${slot.commandeId.substring(5)}] ${formatHours(slot.duree)}</div>
+                         data-commande-id="${slot.commandeId}"
+                         data-operation-type="${slot.operationType}"
+                         data-slot-id="${slotId}"
+                         data-operation='${JSON.stringify({ commandeId: slot.commandeId, operationType: slot.operationType, slotId: slotId }).replace(/'/g, "&#39;")}'
+                         style="position: absolute; top: ${topPosition}px; left: 5px; right: 5px; height: ${heightInPixels}px; z-index: 10;">
+                        <div class="slot-time">${slot.heureDebut}-${slot.heureFin}</div>
+                        <div class="slot-label">[${slot.commandeId.substring(5)}]</div>
+                        <div class="slot-client">${slot.client}</div>
                         <div class="slot-type">${slot.operationType}</div>
                     </div>
                 `;
             });
+            html += '</div>';
+
+            html += '</div>'; // Close timeline-container
 
             html += `
                     </div>
-                    <div class="day-total ${isOverCapacity ? 'over-capacity' : ''}">
-                        ${capacityInfo.heuresUtilisees}h/${capacityInfo.capaciteJour}h
-                        ${isOverCapacity ? ' ❌ DÉPASSÉ' : capacityInfo.pourcentage >= 90 ? ' ⚠️' : ''}
+                    <div class="day-capacity-info">
+                        <div class="day-capacity-bar">
+                            <div class="capacity-fill ${capacityClass}" style="width: ${Math.min(100, capacityInfo.pourcentage)}%"></div>
+                        </div>
+                        <div class="day-total ${isOverCapacity ? 'over-capacity' : ''}">
+                            ${capacityInfo.heuresUtilisees}h/${capacityInfo.capaciteJour}h (${capacityInfo.pourcentage}%)
+                            ${isOverCapacity ? ' ❌' : ''}
+                        </div>
                     </div>
                 </div>
             `;
@@ -918,6 +1136,7 @@ function handleDrop(e) {
     const targetMachine = e.currentTarget.getAttribute('data-machine');
     const targetDay = e.currentTarget.getAttribute('data-day');
     const targetWeek = parseInt(e.currentTarget.getAttribute('data-week'));
+    const targetHour = e.currentTarget.getAttribute('data-hour');
 
     if (!draggedOperation) return;
 
@@ -928,23 +1147,71 @@ function handleDrop(e) {
     const operation = cmd.operations.find(op => op.type === draggedOperation.operationType);
     if (!operation || operation.slots.length === 0) return;
 
-    // Move the slot (simplified: just move the first slot)
-    const slot = operation.slots[0];
+    // Trouver le slot spécifique qui est déplacé en utilisant slotId
+    const draggedSlotId = draggedOperation.slotId;
+    const slot = operation.slots.find(s => {
+        const sId = `${s.semaine}_${s.jour}_${s.heureDebut}`;
+        return sId === draggedSlotId;
+    });
+
+    if (!slot) {
+        console.error('Slot non trouvé:', draggedSlotId);
+        return;
+    }
+
+    // Determine start time based on drop zone
+    let startHour = 9; // Default
+    if (targetHour) {
+        startHour = parseInt(targetHour);
+    }
+    const startTime = `${startHour.toString().padStart(2, '0')}:00`;
+
+    // Calculer les nouvelles valeurs AVANT la validation
+    // Utiliser la durée du SLOT spécifique (pas dureeTotal de l'opération)
+    const endHour = startHour + slot.duree;
+    const endTime = `${Math.floor(endHour).toString().padStart(2, '0')}:${Math.round((endHour % 1) * 60).toString().padStart(2, '0')}`;
+    const newStartDate = getDateFromWeekDay(targetWeek, targetDay, startTime);
+    const newEndDate = getDateFromWeekDay(targetWeek, targetDay, endTime);
+
+    // Sauvegarder les anciennes valeurs du slot
+    const oldSlotData = {
+        machine: slot.machine,
+        jour: slot.jour,
+        semaine: slot.semaine,
+        heureDebut: slot.heureDebut,
+        heureFin: slot.heureFin,
+        dateDebut: slot.dateDebut,
+        dateFin: slot.dateFin
+    };
+
+    // Appliquer temporairement les nouvelles valeurs pour la validation
     slot.machine = targetMachine;
     slot.jour = targetDay;
     slot.semaine = targetWeek;
+    slot.heureDebut = startTime;
+    slot.heureFin = endTime;
+    slot.dateDebut = newStartDate.toISOString().split('.')[0];
+    slot.dateFin = newEndDate.toISOString().split('.')[0];
 
-    // Update dates (simplified)
-    const weekRange = getWeekDateRange(targetWeek);
-    const dayIndex = DAYS_OF_WEEK.indexOf(targetDay);
-    const newDate = new Date(2025, 11, weekRange.start + dayIndex);
+    // 🔒 VALIDATION CRITIQUE: Vérifier l'ordre chronologique avec les NOUVELLES valeurs
+    const validation = canPlaceOperation(cmd, operation, targetWeek, targetDay, startTime);
 
-    slot.dateDebut = `${newDate.toISOString().split('T')[0]}T07:00:00`;
-    const endDate = new Date(newDate);
-    endDate.setHours(7 + Math.floor(slot.duree));
-    endDate.setMinutes((slot.duree % 1) * 60);
-    slot.dateFin = endDate.toISOString().split('.')[0];
+    if (!validation.valid) {
+        // Restaurer les anciennes valeurs si la validation échoue
+        slot.machine = oldSlotData.machine;
+        slot.jour = oldSlotData.jour;
+        slot.semaine = oldSlotData.semaine;
+        slot.heureDebut = oldSlotData.heureDebut;
+        slot.heureFin = oldSlotData.heureFin;
+        slot.dateDebut = oldSlotData.dateDebut;
+        slot.dateFin = oldSlotData.dateFin;
 
+        alert('⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n' + validation.message);
+        renderVueJournee();
+        return;
+    }
+
+    // ✅ Validation OK - les nouvelles valeurs sont déjà appliquées
     // Re-render
     renderVueJournee();
 }
@@ -960,8 +1227,15 @@ function placerAutomatiquement(commandeId) {
     const cmd = commandesDemo.find(c => c.id === commandeId);
     if (!cmd) return;
 
-    // For each operation, find the first available slot
-    cmd.operations.forEach((operation, index) => {
+    // 🔒 VALIDATION CRITIQUE: Vérifier que la commande a les 3 opérations dans le bon ordre
+    const orderValidation = validateOperationOrder(cmd);
+    if (!orderValidation.valid) {
+        alert('⛔ ORDRE DE PRODUCTION INVALIDE\n\n' + orderValidation.message);
+        return;
+    }
+
+    // For each operation, find the first available slot RESPECTING CHRONOLOGICAL ORDER
+    cmd.operations.forEach((operation) => {
         if (operation.slots.length > 0) return; // Already placed
 
         // Get available machines for this operation type
@@ -970,30 +1244,41 @@ function placerAutomatiquement(commandeId) {
         else if (operation.type === 'Poinçonnage') availableMachines = MACHINES.poinconneuses;
         else if (operation.type === 'Pliage') availableMachines = MACHINES.plieuses;
 
-        // Find first available slot (simplified algorithm)
+        // Find first available slot that respects chronological order
         let placed = false;
         for (let week = 50; week <= 52 && !placed; week++) {
             for (let dayIdx = 0; dayIdx < DAYS_OF_WEEK.length && !placed; dayIdx++) {
                 const day = DAYS_OF_WEEK[dayIdx];
 
                 for (let machine of availableMachines) {
+                    // 🔒 VALIDATION: Vérifier que le placement respecte l'ordre CHRONOLOGIQUE
+                    const validation = canPlaceOperation(cmd, operation, week, day, '09:00');
+                    if (!validation.valid) {
+                        continue; // Skip this slot if it violates chronological order
+                    }
+
                     const capacity = calculerCapaciteJour(machine, day, week);
                     const available = capacity.capaciteJour - capacity.heuresUtilisees;
 
                     if (available >= operation.dureeTotal) {
-                        // Place here
-                        const weekRange = getWeekDateRange(week);
-                        const newDate = new Date(2025, 11, weekRange.start + dayIdx);
+                        // Place here starting at 09:00
+                        const startHour = 9;
+                        const endHour = startHour + operation.dureeTotal;
+                        const startTime = `${startHour.toString().padStart(2, '0')}:00`;
+                        const endTime = `${Math.floor(endHour).toString().padStart(2, '0')}:${Math.round((endHour % 1) * 60).toString().padStart(2, '0')}`;
+
+                        const startDate = getDateFromWeekDay(week, day, startTime);
+                        const endDate = getDateFromWeekDay(week, day, endTime);
 
                         operation.slots.push({
                             machine: machine,
                             duree: operation.dureeTotal,
                             semaine: week,
                             jour: day,
-                            heureDebut: "07:00",
-                            heureFin: `${7 + Math.floor(operation.dureeTotal)}:${((operation.dureeTotal % 1) * 60).toString().padStart(2, '0')}`,
-                            dateDebut: `${newDate.toISOString().split('T')[0]}T07:00:00`,
-                            dateFin: `${newDate.toISOString().split('T')[0]}T${7 + Math.floor(operation.dureeTotal)}:${((operation.dureeTotal % 1) * 60).toString().padStart(2, '0')}:00`
+                            heureDebut: startTime,
+                            heureFin: endTime,
+                            dateDebut: startDate.toISOString().split('.')[0],
+                            dateFin: endDate.toISOString().split('.')[0]
                         });
 
                         operation.statut = "Planifiée";
@@ -1027,6 +1312,9 @@ function showCommandeDetails(commandeId) {
     const content = document.getElementById('orderDetailsContent');
 
     content.innerHTML = `
+        <div class="order-details-warning">
+            🔒 <strong>ORDRE CHRONOLOGIQUE:</strong> Cisaille → Poinçon → Pliage (Obligatoire dans le planning)
+        </div>
         <div class="detail-row">
             <span class="detail-label">Commande:</span>
             <span class="detail-value">${cmd.id}</span>

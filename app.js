@@ -748,9 +748,10 @@ function getCapacityColorClass(pourcentage) {
 /**
  * Find first available time gap in a day for an operation
  * Takes into account lunch break (12:30-13:00 Mon-Thu)
+ * @param {string} minTimeStr - Optional minimum start time (HH:MM)
  * @returns {string|null} Start time (HH:MM) or null if no gap found
  */
-function findFirstAvailableGap(machine, jour, semaine, durationNeeded) {
+function findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeStr = null) {
     const placedOrders = getPlacedOrders();
     const capaciteJour = HOURS_PER_DAY[jour];
 
@@ -765,17 +766,21 @@ function findFirstAvailableGap(machine, jour, semaine, durationNeeded) {
         )
         .sort((a, b) => a.heureDebut.localeCompare(b.heureDebut));
 
-    // Define time boundaries (09:00 to 17:00 or 14:00 for Friday)
-    const startHour = 9;
-    const endHour = jour === 'Vendredi' ? 14 : 17;
+    // Define time boundaries
+    // Mon-Thu: 07:30-16:30 (8.5h with lunch 12:30-13:00)
+    // Friday: 07:00-12:00 (5h)
+    const startHour = jour === 'Vendredi' ? 7 : 7.5;  // 07:00 or 07:30
+    const endHour = jour === 'Vendredi' ? 12 : 16.5;  // 12:00 or 16:30
     const totalMinutes = (endHour - startHour) * 60;
 
-    // Create a timeline of busy periods (in minutes from 09:00)
+    // Create a timeline of busy periods (in minutes from start time)
     const busyPeriods = slots.map(slot => {
         const startParts = slot.heureDebut.split(':');
         const endParts = slot.heureFin.split(':');
-        const startMinutes = (parseInt(startParts[0]) - startHour) * 60 + parseInt(startParts[1]);
-        const endMinutes = (parseInt(endParts[0]) - startHour) * 60 + parseInt(endParts[1]);
+        const slotStartHour = parseInt(startParts[0]) + parseInt(startParts[1]) / 60;
+        const slotEndHour = parseInt(endParts[0]) + parseInt(endParts[1]) / 60;
+        const startMinutes = (slotStartHour - startHour) * 60;
+        const endMinutes = (slotEndHour - startHour) * 60;
         return { start: startMinutes, end: endMinutes };
     });
 
@@ -783,22 +788,33 @@ function findFirstAvailableGap(machine, jour, semaine, durationNeeded) {
     if (jour !== 'Vendredi') {
         const lunchStartParts = LUNCH_BREAK.start.split(':');
         const lunchEndParts = LUNCH_BREAK.end.split(':');
-        const lunchStart = (parseInt(lunchStartParts[0]) - startHour) * 60 + parseInt(lunchStartParts[1]);
-        const lunchEnd = (parseInt(lunchEndParts[0]) - startHour) * 60 + parseInt(lunchEndParts[1]);
+        const lunchStartHour = parseInt(lunchStartParts[0]) + parseInt(lunchStartParts[1]) / 60;
+        const lunchEndHour = parseInt(lunchEndParts[0]) + parseInt(lunchEndParts[1]) / 60;
+        const lunchStart = (lunchStartHour - startHour) * 60;
+        const lunchEnd = (lunchEndHour - startHour) * 60;
         busyPeriods.push({ start: lunchStart, end: lunchEnd });
         busyPeriods.sort((a, b) => a.start - b.start);
     }
 
     // Find first gap that fits the duration
     const durationMinutes = durationNeeded * 60;
-    let currentTime = 0; // Start at 09:00
+    let currentTime = 0; // Start at beginning of work day
+
+    // If a minimum start time is provided, adjust initial currentTime
+    if (minTimeStr) {
+        const minParts = minTimeStr.split(':');
+        const minHourDecimal = parseInt(minParts[0]) + parseInt(minParts[1]) / 60;
+        const startOffset = (minHourDecimal - startHour) * 60;
+        currentTime = Math.max(0, startOffset);
+    }
 
     for (const busy of busyPeriods) {
         const gapSize = busy.start - currentTime;
         if (gapSize >= durationMinutes) {
-            // Found a gap!
-            const gapStartHour = startHour + Math.floor(currentTime / 60);
-            const gapStartMinute = currentTime % 60;
+            // Found a gap! Convert back to HH:MM
+            const gapStartDecimal = startHour + currentTime / 60;
+            const gapStartHour = Math.floor(gapStartDecimal);
+            const gapStartMinute = Math.round((gapStartDecimal - gapStartHour) * 60);
             return `${gapStartHour.toString().padStart(2, '0')}:${gapStartMinute.toString().padStart(2, '0')}`;
         }
         currentTime = Math.max(currentTime, busy.end);
@@ -807,12 +823,188 @@ function findFirstAvailableGap(machine, jour, semaine, durationNeeded) {
     // Check gap at the end
     const remainingMinutes = totalMinutes - currentTime;
     if (remainingMinutes >= durationMinutes) {
-        const gapStartHour = startHour + Math.floor(currentTime / 60);
-        const gapStartMinute = currentTime % 60;
+        const gapStartDecimal = startHour + currentTime / 60;
+        const gapStartHour = Math.floor(gapStartDecimal);
+        const gapStartMinute = Math.round((gapStartDecimal - gapStartHour) * 60);
         return `${gapStartHour.toString().padStart(2, '0')}:${gapStartMinute.toString().padStart(2, '0')}`;
     }
 
     return null; // No gap found
+}
+
+/**
+ * Get machines sorted by load (least loaded first) for optimal distribution
+ * @param {Array} machinesList - List of machines to sort
+ * @param {Number} targetWeek - Week number to calculate load for
+ * @returns {Array} Machines sorted by load (ascending)
+ */
+function getMachinesByLoadOrder(machinesList, targetWeek) {
+    // Calculate total load for each machine across all weeks up to targetWeek
+    const machineLoads = machinesList.map(machine => {
+        let totalLoad = 0;
+
+        // Calculate load for weeks 50 to targetWeek
+        for (let week = 50; week <= targetWeek; week++) {
+            const weekCapacity = calculerCapaciteMachine(machine, week);
+            totalLoad += weekCapacity.heuresUtilisees;
+        }
+
+        return {
+            machine: machine,
+            totalLoad: totalLoad,
+            weekCapacity: calculerCapaciteMachine(machine, targetWeek)
+        };
+    });
+
+    // Sort by total load (ascending) - least loaded first
+    machineLoads.sort((a, b) => a.totalLoad - b.totalLoad);
+
+    // Return sorted machine names
+    return machineLoads.map(m => m.machine);
+}
+
+/**
+ * Find best machine for an operation based on load and availability
+ * @returns {Object|null} {machine, week, day, startTime} or null
+ */
+function findBestMachineSlot(operation, cmd, machinesList) {
+    const candidates = [];
+    let rejectedCount = 0;
+    let noGapCount = 0;
+
+    console.log(`🔍 Recherche meilleur slot pour ${operation.type} de ${cmd.id} (durée: ${operation.dureeTotal}h)`);
+    console.log(`   Machines disponibles: ${machinesList.join(', ')}`);
+
+    // Log previous operations status for chronological context
+    const opIndex = cmd.operations.indexOf(operation);
+    if (opIndex > 0) {
+        const prevOp = cmd.operations[opIndex - 1];
+        if (prevOp.slots && prevOp.slots.length > 0) {
+            const lastSlot = prevOp.slots[prevOp.slots.length - 1];
+            console.log(`   ⚠️ ${prevOp.type} DÉJÀ placé: S${lastSlot.semaine} ${lastSlot.jour} se termine à ${lastSlot.heureFin}`);
+        }
+    }
+
+    // Scan all possible slots
+    for (let week = 50; week <= 52; week++) {
+        // Get machines sorted by load for this week
+        const sortedMachines = getMachinesByLoadOrder(machinesList, week);
+
+        for (let dayIdx = 0; dayIdx < DAYS_OF_WEEK.length; dayIdx++) {
+            const day = DAYS_OF_WEEK[dayIdx];
+
+            // Quick pre-check: Can this day/week even work chronologically?
+            // Check if previous operation would prevent ANY placement on this day
+            const opIndex = cmd.operations.indexOf(operation);
+            if (opIndex > 0) {
+                const prevOp = cmd.operations[opIndex - 1];
+                if (prevOp.slots && prevOp.slots.length > 0) {
+                    const lastSlot = prevOp.slots[prevOp.slots.length - 1];
+                    const prevEndDate = getDateFromWeekDay(lastSlot.semaine, lastSlot.jour, lastSlot.heureFin);
+
+                    // Check if this day ends before previous operation finishes
+                    const dayEndTime = day === 'Vendredi' ? '12:00' : '16:30';
+                    const thisDayEndDate = getDateFromWeekDay(week, day, dayEndTime);
+
+                    // Skip if entire day is before previous operation ends
+                    if (thisDayEndDate <= prevEndDate) {
+                        rejectedCount += sortedMachines.length;
+                        continue; // Skip this entire day for all machines
+                    }
+                }
+            }
+
+            for (let machine of sortedMachines) {
+                // Determine minimum start time based on previous operation OR previous slot of current operation
+                let minTimeStr = null;
+                
+                // 1. Check Previous Operation (Standard Chronology)
+                if (opIndex > 0) {
+                    const prevOp = cmd.operations[opIndex - 1];
+                    if (prevOp.slots && prevOp.slots.length > 0) {
+                        const lastSlot = prevOp.slots[prevOp.slots.length - 1];
+                        if (lastSlot.semaine === week && lastSlot.jour === day) {
+                             minTimeStr = lastSlot.heureFin;
+                        }
+                    }
+                }
+
+                // 2. Check Previous Slot of THIS Operation (Splitting support)
+                if (operation.slots && operation.slots.length > 0) {
+                    const lastSelfSlot = operation.slots[operation.slots.length - 1];
+                    
+                    // If last slot is in a future week, we can't place here (shouldn't happen with sorted loop but safety first)
+                    if (lastSelfSlot.semaine > week) continue;
+                    
+                    // If last slot is in this week but future day, skip
+                    if (lastSelfSlot.semaine === week && DAYS_OF_WEEK.indexOf(lastSelfSlot.jour) > dayIdx) continue;
+
+                    // If last slot is same week/day, set minTimeStr
+                    if (lastSelfSlot.semaine === week && lastSelfSlot.jour === day) {
+                        // Must start after the previous slot finishes
+                        // If minTimeStr was already set by prevOp, take the later of the two
+                        if (!minTimeStr || timeToDecimalHours(lastSelfSlot.heureFin) > timeToDecimalHours(minTimeStr)) {
+                            minTimeStr = lastSelfSlot.heureFin;
+                        }
+                    }
+                }
+
+                // Find first available gap
+                const startTime = findFirstAvailableGap(machine, day, week, operation.dureeTotal, minTimeStr);
+
+                if (!startTime) {
+                    noGapCount++;
+                    continue;
+                }
+
+                // Validate chronological order
+                const validation = canPlaceOperation(cmd, operation, week, day, startTime);
+                if (!validation.valid) {
+                    rejectedCount++;
+                    console.log(`  ❌ ${machine} S${week} ${day} ${startTime} - Rejeté: ${validation.message.split('\n')[0]}`);
+                    continue;
+                }
+
+                // Calculate machine load score
+                const machineCapacity = calculerCapaciteMachine(machine, week);
+                const loadScore = machineCapacity.heuresUtilisees / TOTAL_HOURS_PER_WEEK;
+
+                console.log(`  ✅ ${machine} S${week} ${day} ${startTime} - Valide (charge: ${(loadScore * 100).toFixed(1)}%)`);
+
+                candidates.push({
+                    machine: machine,
+                    week: week,
+                    day: day,
+                    startTime: startTime,
+                    loadScore: loadScore, // Lower is better
+                    weekPriority: week // Earlier weeks are better
+                });
+            }
+        }
+    }
+
+    console.log(`📊 Résumé scan: ${candidates.length} candidats trouvés, ${rejectedCount} rejetés (chronologie), ${noGapCount} sans créneau`);
+
+    if (candidates.length === 0) return null;
+
+    // Sort candidates: prioritize earlier weeks, then earlier days, then lower load
+    candidates.sort((a, b) => {
+        if (a.weekPriority !== b.weekPriority) {
+            return a.weekPriority - b.weekPriority; // Earlier week first
+        }
+        
+        const dayIndexA = DAYS_OF_WEEK.indexOf(a.day);
+        const dayIndexB = DAYS_OF_WEEK.indexOf(b.day);
+        if (dayIndexA !== dayIndexB) {
+            return dayIndexA - dayIndexB; // Earlier day first
+        }
+
+        return a.loadScore - b.loadScore; // Lower load first
+    });
+
+    console.log(`🎯 Meilleur slot: ${candidates[0].machine} S${candidates[0].week} ${candidates[0].day} ${candidates[0].startTime}`);
+
+    return candidates[0];
 }
 
 /**
@@ -967,7 +1159,8 @@ function canPlaceOperation(commande, operation, targetWeek, targetDay, targetSta
                 // Il faut que cette opération se termine avant nextStart
                 const nextStartHour = parseInt(nextFirstSlot.heureDebut.split(':')[0]) + parseInt(nextFirstSlot.heureDebut.split(':')[1]) / 60;
                 const maxStartHour = Math.floor(nextStartHour - operation.dureeTotal);
-                const suggestedMaxTime = maxStartHour >= 9 ? `${maxStartHour.toString().padStart(2, '0')}:00` : 'impossible ce jour';
+                const minWorkHour = nextFirstSlot.jour === 'Vendredi' ? 7 : 7.5;
+                const suggestedMaxTime = maxStartHour >= minWorkHour ? `${maxStartHour.toString().padStart(2, '0')}:00` : 'impossible ce jour';
 
                 return {
                     valid: false,
@@ -1137,10 +1330,11 @@ function renderVueJournee() {
     html += '<div class="day-header-cell machine-col">Machine</div>';
     DAYS_OF_WEEK.forEach((day, index) => {
         const capacity = HOURS_PER_DAY[day];
+        const timeRange = day === 'Vendredi' ? '07h-12h' : '07h30-16h30';
         html += `
             <div class="day-header-cell day-col ${day === 'Vendredi' ? 'friday' : ''}">
                 <div class="day-name">${day}</div>
-                <div class="day-capacity">09h-${capacity === 8 ? '17h' : '14h'} (${capacity}h)</div>
+                <div class="day-capacity">${timeRange} (${capacity}h)</div>
             </div>
         `;
     });
@@ -1157,13 +1351,30 @@ function renderVueJournee() {
             const capacityInfo = calculerCapaciteJour(machine, day, semaineSelectionnee);
             const capacityClass = getCapacityColorClass(capacityInfo.pourcentage);
             const isOverCapacity = capacityInfo.heuresUtilisees > capacityInfo.capaciteJour;
-            const maxHour = day === 'Vendredi' ? 14 : 17;
+            // Timeline hours: Fri 07:00-12:00, Mon-Thu 07:30-16:30
+            const startHourTimeline = day === 'Vendredi' ? 7 : 7.5;
+            const endHourTimeline = day === 'Vendredi' ? 12 : 16.5;
 
             html += `
                 <div class="day-cell ${day === 'Vendredi' ? 'friday' : ''}"
                      data-machine="${machine}"
                      data-day="${day}"
                      data-week="${semaineSelectionnee}">
+                     
+                    <!-- New Top Stats Header -->
+                    <div class="day-stat-header">
+                        <div class="stat-row">
+                            <span>Charge: ${capacityInfo.pourcentage}%</span>
+                            <span class="${isOverCapacity ? 'text-danger' : ''}">
+                                ${capacityInfo.heuresUtilisees}h / ${capacityInfo.capaciteJour}h
+                                ${isOverCapacity ? '⚠️' : ''}
+                            </span>
+                        </div>
+                        <div class="stat-progress">
+                            <div class="stat-progress-bar ${capacityClass}" style="width: ${Math.min(100, capacityInfo.pourcentage)}%"></div>
+                        </div>
+                    </div>
+
                     <div class="day-timeline">
             `;
 
@@ -1194,16 +1405,22 @@ function renderVueJournee() {
             // Create a container with absolute positioning for the timeline
             html += '<div class="timeline-container">';
 
-            // Create hourly time grid (background - 09:00 to 17:00 or 14:00)
+            // Create hourly time grid (background)
             html += '<div class="time-grid">';
-            for (let hour = 9; hour < maxHour; hour++) {
-                const timeSlot = `${hour.toString().padStart(2, '0')}:00`;
+            // Generate time slots based on day
+            const startHour = Math.floor(startHourTimeline);
+            const endHour = Math.ceil(endHourTimeline);
+            for (let hour = startHour; hour < endHour; hour++) {
+                // For 7:30 start, show 07:30, 08:30, 09:30...
+                const minute = (hour === startHour && day !== 'Vendredi') ? '30' : '00';
+                const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
                 html += `
                     <div class="time-slot drop-zone"
                          data-machine="${machine}"
                          data-day="${day}"
                          data-week="${semaineSelectionnee}"
-                         data-hour="${hour}">
+                         data-hour="${hour}"
+                         data-time="${timeSlot}">
                         <div class="time-label">${timeSlot}</div>
                     </div>
                 `;
@@ -1212,37 +1429,73 @@ function renderVueJournee() {
 
             // Overlay operations with absolute positioning
             html += '<div class="operations-overlay">';
+            
+            // Add lunch break visual for Mon-Thu
+            if (day !== 'Vendredi') {
+                const startHourTimeline = 7.5; // 07:30
+                const lunchStart = 12.5; // 12:30
+                const lunchDuration = 0.5; // 30min
+                const topLunch = (lunchStart - startHourTimeline) * 60;
+                const heightLunch = lunchDuration * 60;
+                
+                html += `
+                    <div class="lunch-break" style="top: ${topLunch}px; height: ${heightLunch}px;"></div>
+                `;
+            }
+
             slots.forEach(slot => {
                 const startHour = parseInt(slot.heureDebut.split(':')[0]);
                 const startMinute = parseInt(slot.heureDebut.split(':')[1]);
+                const startDecimal = startHour + (startMinute / 60);
+                
+                // Calculate end time decimal
+                const endHourParts = slot.heureFin.split(':');
+                const endDecimal = parseInt(endHourParts[0]) + parseInt(endHourParts[1]) / 60;
 
-                // Calculate position from top (9:00 = 0px)
-                const startOffsetHours = startHour - 9 + (startMinute / 60);
-                const topPosition = startOffsetHours * 60; // 60px per hour
+                // Check if crossing lunch (Mon-Thu only, lunch 12:30-13:00)
+                const lunchStart = 12.5;
+                const lunchEnd = 13.0;
+                const crossesLunch = day !== 'Vendredi' && startDecimal < lunchStart && endDecimal > lunchEnd;
 
-                // Calculate height
-                const durationInHours = slot.duree;
-                const heightInPixels = durationInHours * 60;
+                const renderSlotDiv = (sTime, eTime, isSplitPart = false) => {
+                    const sH = Math.floor(sTime);
+                    const sM = Math.round((sTime - sH) * 60);
+                    // Position relative to timeline start (7.5 or 7.0)
+                    const startOffsetHours = sTime - startHourTimeline;
+                    const topPosition = startOffsetHours * 60;
+                    const heightInPixels = (eTime - sTime) * 60;
+                    
+                    // Specific class for split parts to look connected?
+                    // Maybe just same styling.
+                    
+                    const typeClass = slot.operationType.toLowerCase().replace('ç', 'c').replace('é', 'e');
+                    const slotId = `${slot.semaine}_${slot.jour}_${slot.heureDebut}`; // Original ID
 
-                const typeClass = slot.operationType.toLowerCase().replace('ç', 'c').replace('é', 'e');
+                    return `
+                        <div class="operation-slot ${typeClass} draggable"
+                             draggable="true"
+                             data-commande-id="${slot.commandeId}"
+                             data-operation-type="${slot.operationType}"
+                             data-slot-id="${slotId}"
+                             data-operation='${JSON.stringify({ commandeId: slot.commandeId, operationType: slot.operationType, slotId: slotId }).replace(/'/g, "&#39;")}'
+                             style="position: absolute; top: ${topPosition}px; left: 5px; right: 5px; height: ${heightInPixels}px; z-index: 10;">
+                            <div class="slot-time">${slot.heureDebut}-${slot.heureFin}</div>
+                            <div class="slot-label">[${slot.commandeId.substring(5)}]</div>
+                            <div class="slot-client">${slot.client}</div>
+                            <div class="slot-type">${slot.operationType}</div>
+                        </div>
+                    `;
+                };
 
-                // Créer un identifiant unique pour ce slot
-                const slotId = `${slot.semaine}_${slot.jour}_${slot.heureDebut}`;
-
-                html += `
-                    <div class="operation-slot ${typeClass} draggable"
-                         draggable="true"
-                         data-commande-id="${slot.commandeId}"
-                         data-operation-type="${slot.operationType}"
-                         data-slot-id="${slotId}"
-                         data-operation='${JSON.stringify({ commandeId: slot.commandeId, operationType: slot.operationType, slotId: slotId }).replace(/'/g, "&#39;")}'
-                         style="position: absolute; top: ${topPosition}px; left: 5px; right: 5px; height: ${heightInPixels}px; z-index: 10;">
-                        <div class="slot-time">${slot.heureDebut}-${slot.heureFin}</div>
-                        <div class="slot-label">[${slot.commandeId.substring(5)}]</div>
-                        <div class="slot-client">${slot.client}</div>
-                        <div class="slot-type">${slot.operationType}</div>
-                    </div>
-                `;
+                if (crossesLunch) {
+                    // Render Part 1: Start -> 12:30
+                    html += renderSlotDiv(startDecimal, lunchStart, true);
+                    // Render Part 2: 13:00 -> End
+                    html += renderSlotDiv(lunchEnd, endDecimal, true);
+                } else {
+                    // Render Normal
+                    html += renderSlotDiv(startDecimal, endDecimal);
+                }
             });
             html += '</div>';
 
@@ -1250,15 +1503,7 @@ function renderVueJournee() {
 
             html += `
                     </div>
-                    <div class="day-capacity-info">
-                        <div class="day-capacity-bar">
-                            <div class="capacity-fill ${capacityClass}" style="width: ${Math.min(100, capacityInfo.pourcentage)}%"></div>
-                        </div>
-                        <div class="day-total ${isOverCapacity ? 'over-capacity' : ''}">
-                            ${capacityInfo.heuresUtilisees}h/${capacityInfo.capaciteJour}h (${capacityInfo.pourcentage}%)
-                            ${isOverCapacity ? ' ❌' : ''}
-                        </div>
-                    </div>
+                    <!-- Old footer removed -->
                 </div>
             `;
         });
@@ -1319,7 +1564,12 @@ function renderCommandesNonPlacees() {
                          data-sidebar-operation='${JSON.stringify({ commandeId: cmd.id, operationType: op.type, duration: op.dureeTotal, fromSidebar: true }).replace(/'/g, "&#39;")}'>
                         <div class="op-icon">⋮⋮</div>
                         <div class="op-info">
-                            <div class="op-type">${op.type}</div>
+                            <div class="op-type">
+                                ${op.type}
+                                <span style="font-weight:normal; font-size:0.85em; color:#6c757d; margin-left:4px;">
+                                    (${cmd.client})
+                                </span>
+                            </div>
                             <div class="op-duration">${formatHours(op.dureeTotal)}</div>
                         </div>
                     </div>
@@ -1431,6 +1681,85 @@ function handleDragLeave(e) {
     e.currentTarget.classList.remove('drag-over');
 }
 
+/**
+ * Check if a specific time slot is available on a machine
+ * @param {string} machine - Machine name
+ * @param {string} day - Day name
+ * @param {number} week - Week number
+ * @param {string} startTime - Start time (HH:MM)
+ * @param {number} duration - Duration in hours
+ * @returns {Object} { valid: boolean, reason: string }
+ */
+function isMachineAvailable(machine, day, week, startTime, duration) {
+    const EPSILON = 0.001; // Tolerance for float comparisons
+    const start = timeToDecimalHours(startTime);
+    const end = start + duration;
+
+    // Check working hours
+    const dayStart = day === 'Vendredi' ? 7 : 7.5;
+    const dayEnd = day === 'Vendredi' ? 12 : 16.5;
+
+    if (start < dayStart - EPSILON) {
+        return { valid: false, reason: `L'horaire de début (${startTime}) est avant l'ouverture (${formatDecimalTime(dayStart)}).` };
+    }
+    if (end > dayEnd + EPSILON) {
+        return { valid: false, reason: `L'opération se termine à ${formatDecimalTime(end)}, ce qui dépasse la fermeture (${formatDecimalTime(dayEnd)}).` };
+    }
+
+    // Check lunch break
+    if (day !== 'Vendredi') {
+        const lunchStart = 12.5; // 12:30
+        const lunchEnd = 13.0;   // 13:00
+        
+        // If operation is FULLY inside lunch, that's invalid
+        if (start >= lunchStart && end <= lunchEnd) {
+             return { valid: false, reason: `L'opération ne peut pas être placée entièrement pendant la pause déjeuner.` };
+        }
+        
+        // We now ALLOW spanning across lunch (e.g. 11:00 to 14:00)
+        // The duration check logic in handleDrop will adjust end time.
+        // But here we must check if the *machine* is physically available during the WORK time parts.
+        // Actually, existing slots might also span lunch. 
+        // If I put 11:00-14:30 (3h work), the slot in DB says 11:00-14:30.
+        // My isMachineAvailable check compares 11:00-14:30 against existing slots.
+        // Overlap logic still holds.
+        // The only "forbidden" time is starting/ending *inside* the break? 
+        // Let's say we allow it for now, handleDrop fixes the timing.
+    }
+
+    // Check existing slots
+    const placedOrders = getPlacedOrders();
+    const slots = placedOrders
+        .flatMap(cmd => cmd.operations)
+        .flatMap(op => op.slots)
+        .filter(slot =>
+            slot.machine === machine &&
+            slot.jour === day &&
+            slot.semaine === week
+        );
+
+    for (const slot of slots) {
+        const sStart = timeToDecimalHours(slot.heureDebut);
+        const sEnd = timeToDecimalHours(slot.heureFin);
+
+        // Check overlap: (Start < SlotEnd) AND (End > SlotStart)
+        if (start < sEnd - EPSILON && end > sStart + EPSILON) {
+             return { valid: false, reason: `La machine est occupée de ${slot.heureDebut} à ${slot.heureFin} par une autre opération.` };
+        }
+    }
+
+    return { valid: true, reason: '' };
+}
+
+/**
+ * Helper to format decimal time (e.g. 16.5 -> 16:30) for messages
+ */
+function formatDecimalTime(decimalTime) {
+    const hours = Math.floor(decimalTime);
+    const minutes = Math.round((decimalTime - hours) * 60);
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+}
+
 function handleDrop(e) {
     e.preventDefault();
     e.currentTarget.classList.remove('drag-over');
@@ -1439,6 +1768,7 @@ function handleDrop(e) {
     const targetDay = e.currentTarget.getAttribute('data-day');
     const targetWeek = parseInt(e.currentTarget.getAttribute('data-week'));
     const targetHour = e.currentTarget.getAttribute('data-hour');
+    const targetTime = e.currentTarget.getAttribute('data-time');
 
     if (!draggedOperation) return;
 
@@ -1455,49 +1785,114 @@ function handleDrop(e) {
     const operation = cmd.operations.find(op => op.type === draggedOperation.operationType);
     if (!operation) return;
 
-    // CASE 1: Drag from sidebar (new placement)
+    // CASE 1: Drag from sidebar
     if (draggedOperation.fromSidebar) {
-        // Use findFirstAvailableGap to find best time
-        const bestTime = findFirstAvailableGap(targetMachine, targetDay, targetWeek, operation.dureeTotal);
+        let bestSlot = null;
+        let forcedPlacement = false;
 
-        if (!bestTime) {
-            alert(`❌ Pas de créneau disponible pour ${operation.type} sur ${targetMachine} - ${targetDay} S${targetWeek}`);
+        // NEW: Check if dropped on a specific target (Machine + Day + Week)
+        if (targetMachine && targetDay && targetWeek) {
+            let proposedStartTime = null;
+
+            if (targetTime) {
+                // Dropped on a specific time slot (e.g. 07:30)
+                proposedStartTime = targetTime;
+            } else if (targetHour) {
+                // Fallback (should be covered by targetTime now)
+                proposedStartTime = `${targetHour.toString().padStart(2, '0')}:00`;
+            } else {
+                // Dropped on the day/machine column generally?
+                // Try to find first gap on THIS machine/day
+                proposedStartTime = findFirstAvailableGap(targetMachine, targetDay, targetWeek, operation.dureeTotal);
+            }
+
+            if (proposedStartTime) {
+                // 1. Check Availability at this specific time
+                const availability = isMachineAvailable(targetMachine, targetDay, targetWeek, proposedStartTime, operation.dureeTotal);
+                
+                if (availability.valid) {
+                    // 2. Check Chronology (canPlaceOperation)
+                    const validation = canPlaceOperation(cmd, operation, targetWeek, targetDay, proposedStartTime);
+                    
+                    if (validation.valid) {
+                         // Create a "bestSlot" object to reuse the placement logic below
+                         bestSlot = {
+                             machine: targetMachine,
+                             week: targetWeek,
+                             day: targetDay,
+                             startTime: proposedStartTime,
+                             loadScore: 0 // Irrelevant for manual placement
+                         };
+                         forcedPlacement = true;
+                    } else {
+                        // Chronology error - Show alert and stop
+                        alert('⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n' + validation.message);
+                        return;
+                    }
+                } else {
+                    // Availability error - Only alert if user tried to force a specific slot
+                    if (targetTime || targetHour) {
+                        alert(`❌ Placement impossible :\n${availability.reason}`);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // If no forced placement (or it failed silently for generic drop), fall back to auto-placement
+        if (!bestSlot) {
+             // Get available machines for this operation type
+            let availableMachines = [];
+            if (operation.type === 'Cisaillage') availableMachines = MACHINES.cisailles;
+            else if (operation.type === 'Poinçonnage') availableMachines = MACHINES.poinconneuses;
+            else if (operation.type === 'Pliage') availableMachines = MACHINES.plieuses;
+
+            // 🎯 Find best slot with load balancing (not forced on targetMachine)
+            bestSlot = findBestMachineSlot(operation, cmd, availableMachines);
+        }
+
+        if (!bestSlot) {
+            alert(`❌ Impossible de placer ${operation.type}. Aucun créneau disponible respectant l'ordre chronologique.`);
             refresh();
             return;
         }
 
-        const startTime = bestTime;
-        const startTimeParts = startTime.split(':');
+        // Calculate end time
+        const startTimeParts = bestSlot.startTime.split(':');
         const startHourCalc = parseInt(startTimeParts[0]) + parseInt(startTimeParts[1]) / 60;
-        const endHourFloat = startHourCalc + operation.dureeTotal;
+        
+        // Adjust for lunch break if crossing it (Mon-Thu)
+        let effectiveDuration = operation.dureeTotal;
+        const lunchStart = 12.5; // 12:30
+        
+        if (bestSlot.day !== 'Vendredi' && startHourCalc < lunchStart && (startHourCalc + effectiveDuration) > lunchStart) {
+            effectiveDuration += 0.5; // Add 30min break
+        }
+
+        const endHourFloat = startHourCalc + effectiveDuration;
         const endHour = Math.floor(endHourFloat);
         const endMinute = Math.round((endHourFloat - endHour) * 60);
         const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
 
-        // Validate chronological order
-        const validation = canPlaceOperation(cmd, operation, targetWeek, targetDay, startTime);
-        if (!validation.valid) {
-            alert('⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n' + validation.message);
-            refresh();
-            return;
-        }
-
-        // Create new slot
-        const dateDebut = getDateFromWeekDay(targetWeek, targetDay, startTime);
-        const dateFin = getDateFromWeekDay(targetWeek, targetDay, endTime);
+        // Create new slot with best machine
+        const dateDebut = getDateFromWeekDay(bestSlot.week, bestSlot.day, bestSlot.startTime);
+        const dateFin = getDateFromWeekDay(bestSlot.week, bestSlot.day, endTime);
 
         operation.slots.push({
-            machine: targetMachine,
+            machine: bestSlot.machine,
             duree: operation.dureeTotal,
-            semaine: targetWeek,
-            jour: targetDay,
-            heureDebut: startTime,
+            semaine: bestSlot.week,
+            jour: bestSlot.day,
+            heureDebut: bestSlot.startTime,
             heureFin: endTime,
             dateDebut: dateDebut.toISOString().split('.')[0],
             dateFin: dateFin.toISOString().split('.')[0]
         });
 
         operation.statut = "Planifiée";
+
+        const typeMsg = forcedPlacement ? "Drag manuel" : "Drag auto";
+        console.log(`✅ ${typeMsg}: Placé ${operation.type} sur ${bestSlot.machine} - S${bestSlot.week} ${bestSlot.day} ${bestSlot.startTime}`);
 
         // Update command status if all operations placed
         const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
@@ -1594,9 +1989,10 @@ function placerAutomatiquement(commandeId) {
         return;
     }
 
-    // For each operation, find the first available gap RESPECTING CHRONOLOGICAL ORDER
-    cmd.operations.forEach((operation) => {
-        if (operation.slots.length > 0) return; // Already placed
+    // For each operation, find BEST machine slot (load-balanced)
+    // Use for...of to allow breaking if an operation fails
+    for (const operation of cmd.operations) {
+        if (operation.slots.length > 0) continue; // Already placed
 
         // Get available machines for this operation type
         let availableMachines = [];
@@ -1604,63 +2000,80 @@ function placerAutomatiquement(commandeId) {
         else if (operation.type === 'Poinçonnage') availableMachines = MACHINES.poinconneuses;
         else if (operation.type === 'Pliage') availableMachines = MACHINES.plieuses;
 
-        // Find first available gap that respects chronological order
-        let placed = false;
-        for (let week = 50; week <= 52 && !placed; week++) {
-            for (let dayIdx = 0; dayIdx < DAYS_OF_WEEK.length && !placed; dayIdx++) {
-                const day = DAYS_OF_WEEK[dayIdx];
+        const MAX_CHUNK_DURATION = 2.0; // Split long operations into 2h chunks
+        let remainingDuration = operation.dureeTotal;
+        let placementFailed = false;
 
-                for (let machine of availableMachines) {
-                    // Find first available gap using smart algorithm
-                    const startTime = findFirstAvailableGap(machine, day, week, operation.dureeTotal);
+        // Loop to place chunks until full duration is scheduled
+        while (remainingDuration > 0.01) { // 0.01 tolerance for float math
+            // Determine chunk size for this iteration
+            const currentChunkDuration = Math.min(remainingDuration, MAX_CHUNK_DURATION);
+            
+            // Temporarily update operation duration for the search
+            // We need to clone the operation or modify it temporarily because findBestMachineSlot reads dureeTotal
+            const originalDuration = operation.dureeTotal;
+            operation.dureeTotal = currentChunkDuration;
 
-                    if (!startTime) continue; // No gap available
+            // 🎯 Find best slot for this chunk
+            const bestSlot = findBestMachineSlot(operation, cmd, availableMachines);
+            
+            // Restore original total duration (for data consistency)
+            operation.dureeTotal = originalDuration;
 
-                    // 🔒 VALIDATION: Vérifier que le placement respecte l'ordre CHRONOLOGIQUE
-                    const validation = canPlaceOperation(cmd, operation, week, day, startTime);
-                    if (!validation.valid) {
-                        continue; // Skip this slot if it violates chronological order
-                    }
-
-                    // Calculate end time
-                    const startParts = startTime.split(':');
-                    const startHourFloat = parseInt(startParts[0]) + parseInt(startParts[1]) / 60;
-                    const endHourFloat = startHourFloat + operation.dureeTotal;
-                    const endHour = Math.floor(endHourFloat);
-                    const endMinute = Math.round((endHourFloat - endHour) * 60);
-                    const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
-
-                    const startDate = getDateFromWeekDay(week, day, startTime);
-                    const endDate = getDateFromWeekDay(week, day, endTime);
-
-                    operation.slots.push({
-                        machine: machine,
-                        duree: operation.dureeTotal,
-                        semaine: week,
-                        jour: day,
-                        heureDebut: startTime,
-                        heureFin: endTime,
-                        dateDebut: startDate.toISOString().split('.')[0],
-                        dateFin: endDate.toISOString().split('.')[0]
-                    });
-
-                    operation.statut = "Planifiée";
-                    placed = true;
-                    break;
-                }
+            if (!bestSlot) {
+                console.warn(`⚠️ Impossible de placer une partie de l'opération ${operation.type} (${currentChunkDuration}h) de la commande ${cmd.id}`);
+                alert(`⚠️ Impossible de placer ${operation.type} (reste ${formatHours(remainingDuration)}). Les opérations suivantes ne seront pas planifiées.`);
+                placementFailed = true;
+                break; 
             }
+
+            // Calculate end time
+            const startParts = bestSlot.startTime.split(':');
+            const startHourFloat = parseInt(startParts[0]) + parseInt(startParts[1]) / 60;
+            const endHourFloat = startHourFloat + currentChunkDuration;
+            const endHour = Math.floor(endHourFloat);
+            const endMinute = Math.round((endHourFloat - endHour) * 60);
+            const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
+
+            const startDate = getDateFromWeekDay(bestSlot.week, bestSlot.day, bestSlot.startTime);
+            const endDate = getDateFromWeekDay(bestSlot.week, bestSlot.day, endTime);
+
+            // Place chunk
+            operation.slots.push({
+                machine: bestSlot.machine,
+                duree: currentChunkDuration,
+                semaine: bestSlot.week,
+                jour: bestSlot.day,
+                heureDebut: bestSlot.startTime,
+                heureFin: endTime,
+                dateDebut: startDate.toISOString().split('.')[0],
+                dateFin: endDate.toISOString().split('.')[0]
+            });
+
+            console.log(`✅ Placé ${operation.type} (partie ${formatHours(currentChunkDuration)}) sur ${bestSlot.machine} - S${bestSlot.week} ${bestSlot.day} ${bestSlot.startTime}`);
+
+            // Update remaining
+            remainingDuration -= currentChunkDuration;
         }
-    });
+
+        if (placementFailed) {
+            break; // Stop placing subsequent operations for this command
+        }
+
+        operation.statut = "Planifiée";
+    }
 
     // Update command status
     const allPlaced = cmd.operations.every(op => op.slots.length > 0);
     if (allPlaced) {
         cmd.statut = "Planifiée";
+        alert(`✅ Commande ${commandeId} placée automatiquement avec répartition optimale !`);
+    } else {
+        alert(`⚠️ Commande ${commandeId} partiellement placée. Certaines opérations n'ont pas pu être placées.`);
     }
 
     // Re-render
     refresh();
-    alert(`Commande ${commandeId} placée automatiquement !`);
 }
 
 /**

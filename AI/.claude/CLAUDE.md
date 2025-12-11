@@ -188,7 +188,11 @@ When modifying scheduling logic, these are the key functions:
    - `validateOperationOrder(commande)` - app.js:608 - Validates 3 operations exist in correct sequence
    - `canPlaceOperation(commande, operation, targetWeek, targetDay, targetStartTime)` - app.js:649 - Validates chronological timing
 
-2. **Capacity Calculations:**
+2. **Placement Logic:**
+   - `findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeStr)` - app.js:565 - Finds gap, optionally starting after minTimeStr
+   - `findBestMachineSlot(operation, cmd, machinesList)` - app.js:872 - Load-balanced slot finder with chronological checks
+
+3. **Capacity Calculations:**
    - `calculerCapaciteMachine(machine, semaine)` - app.js:519
    - `calculerCapaciteJour(machine, jour, semaine)` - app.js:535
 
@@ -313,3 +317,40 @@ Since this is a mockup with no test framework:
 - **Problem:** Cards appeared in sidebar with no operations to display
 - **Cause:** Rendering didn't check if operations HTML was empty before creating card
 - **Fix:** Build operations HTML first, skip card if empty, show message if no cards to display (app.js:840)
+
+# TOKEN OPTIMIZATION PROTOCOLS — INITIALIZED
+
+## ⚡ Auto-Active Token Optimization Hooks (60–80% Savings)
+
+**ALWAYS ACTIVE — No manual commands required**
+
+DAILY_TOKEN_BUDGET=5000
+TOKEN_EFFICIENCY_MODE="balanced" # Auto-switches to high/ultra as budget depletes
+
+
+### Budget Thresholds
+- **< 500 remaining** → ULTRA mode (minimal context)  
+- **< 1500 remaining** → HIGH mode (targeted operations)  
+- **> 1500 remaining** → BALANCED mode (standard)
+
+---
+
+## 🚀 High-Efficiency Command Patterns
+
+| Command                     | Tokens | vs Manual |
+|-----------------------------|--------|-----------|
+| `chp`                       | 300    | 1500+     |
+| `chs find-code "PATTERN"`   | 200    | 800+      |
+| `ch m read-many f1 f2 f3`   | 400    | 1200+     |
+| `chg quick-commit "msg"`    | 150    | 600+      |
+
+---
+
+## 📊 Session Token Allocation
+
+| Phase                 | Budget | Tokens |
+|-----------------------|--------|--------|
+| Project Analysis      | 20%    | 1000   |
+| Core Development      | 50%    | 2500   |
+| Testing/Optimization  | 20%    | 1000   |
+| Documentation         | 10%    | 500    |

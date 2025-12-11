@@ -356,3 +356,40 @@ socket.on('command:created', (data) => {
 6. Implement WebSocket for real-time
 7. Update frontend to consume API
 8. Deploy to production
+
+# TOKEN OPTIMIZATION PROTOCOLS — INITIALIZED
+
+## ⚡ Auto-Active Token Optimization Hooks (60–80% Savings)
+
+**ALWAYS ACTIVE — No manual commands required**
+
+DAILY_TOKEN_BUDGET=5000
+TOKEN_EFFICIENCY_MODE="balanced" # Auto-switches to high/ultra as budget depletes
+
+
+### Budget Thresholds
+- **< 500 remaining** → ULTRA mode (minimal context)  
+- **< 1500 remaining** → HIGH mode (targeted operations)  
+- **> 1500 remaining** → BALANCED mode (standard)
+
+---
+
+## 🚀 High-Efficiency Command Patterns
+
+| Command                     | Tokens | vs Manual |
+|-----------------------------|--------|-----------|
+| `chp`                       | 300    | 1500+     |
+| `chs find-code "PATTERN"`   | 200    | 800+      |
+| `ch m read-many f1 f2 f3`   | 400    | 1200+     |
+| `chg quick-commit "msg"`    | 150    | 600+      |
+
+---
+
+## 📊 Session Token Allocation
+
+| Phase                 | Budget | Tokens |
+|-----------------------|--------|--------|
+| Project Analysis      | 20%    | 1000   |
+| Core Development      | 50%    | 2500   |
+| Testing/Optimization  | 20%    | 1000   |
+| Documentation         | 10%    | 500    |

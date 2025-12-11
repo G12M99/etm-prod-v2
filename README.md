@@ -18,9 +18,9 @@
 
 ### Capacité de production
 
-- **Lundi à Jeudi** : 8.5h/jour (07h30-12h30 / 13h00-16h30)
+- **Lundi à Jeudi** : 8.5h/jour (07h30-16h30 avec pause 12h30-13h00)
 - **Vendredi** : 5h (07h00-12h00)
-- **Total hebdomadaire** : 39h
+- **Total hebdomadaire** : 39h (8.5h × 4 + 5h)
 
 ## Nouveautés V2
 

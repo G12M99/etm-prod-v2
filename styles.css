@@ -952,6 +952,28 @@ body {
     min-height: 600px; /* Ensure space for hours */
 }
 
+/* Current Time Line Indicator */
+.current-time-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 2px solid #dc3545; /* Red line */
+    z-index: 50; /* Above slots (10) and grid */
+    pointer-events: none; /* Let clicks pass through */
+    box-shadow: 0 1px 3px rgba(220, 53, 69, 0.4);
+}
+
+.current-time-line::before {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: -5px;
+    width: 10px;
+    height: 10px;
+    background-color: #dc3545;
+    border-radius: 50%;
+}
+
 /* Lunch Break Visualization */
 .lunch-break {
     position: absolute;
@@ -1469,13 +1491,190 @@ body {
     outline-offset: 2px;
 }
 
-/* Reduced motion */
-@media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
+/* ===================================
+   Sync Controls
+   =================================== */
+
+.sync-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.sync-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: #f8f9fa;
+    border-radius: var(--border-radius-sm);
+    font-size: 13px;
+    border: 1px solid var(--color-border);
+    transition: all 0.3s ease;
+}
+
+.sync-indicator span:first-child {
+    font-weight: bold;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.sync-indicator.sync-synced {
+    background: #d4edda;
+    border-color: #28a745;
+    color: #155724;
+}
+
+.sync-indicator.sync-syncing {
+    background: #d1ecf1;
+    border-color: #0d6efd;
+    color: #004085;
+}
+
+.sync-indicator.sync-syncing span:first-child {
+    animation: rotate 1s linear infinite;
+}
+
+.sync-indicator.sync-offline {
+    background: #fff3cd;
+    border-color: #ffc107;
+    color: #856404;
+}
+
+.sync-indicator.sync-error {
+    background: #f8d7da;
+    border-color: #dc3545;
+    color: #721c24;
+}
+
+ @keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Dropdown Menu */
+.dropdown {
+    position: relative;
+}
+
+.dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: white;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-lg);
+    min-width: 220px;
+    padding: var(--spacing-xs);
+    display: none;
+    z-index: 1000;
+}
+
+.dropdown.active .dropdown-menu {
+    display: block;
+    animation: slideDown 0.2s ease;
+}
+
+ @keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
     }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.dropdown-menu button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    text-align: left;
+    padding: var(--spacing-sm);
+    border: none;
+    background: none;
+    cursor: pointer;
+    border-radius: var(--border-radius-sm);
+    font-size: var(--font-size-sm);
+    color: var(--color-text);
+    transition: background 0.2s;
+}
+
+.dropdown-menu button:hover {
+    background: var(--color-background);
+}
+
+.dropdown-menu button svg {
+    flex-shrink: 0;
+}
+
+/* Toast Notifications */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: white;
+    padding: var(--spacing-md);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    min-width: 300px;
+    z-index: 10000;
+    animation: slideInRight 0.3s ease;
+}
+
+ @keyframes slideInRight {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.toast.fade-out {
+    animation: slideOutRight 0.3s ease;
+}
+
+ @keyframes slideOutRight {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+}
+
+.toast.toast-success {
+    border-left: 4px solid #28a745;
+}
+
+.toast.toast-error {
+    border-left: 4px solid #dc3545;
+}
+
+.toast.toast-warning {
+    border-left: 4px solid #ffc107;
+}
+
+.toast.toast-info {
+    border-left: 4px solid #0d6efd;
+}
+
+.toast-icon {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.toast-message {
+    flex: 1;
 }

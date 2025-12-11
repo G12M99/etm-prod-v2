@@ -40,8 +40,8 @@ const DUREE_PAR_KG = {
     'Pliage': 0.025        // 0.025h par kg
 };
 
-// Current time simulation
-let currentTime = new Date('2025-12-11T14:00:00');
+// Current time simulation (Now Real Time by default)
+let currentTime = new Date(); // Uses system time by default
 
 // View state
 let vueActive = 'semaine'; // 'semaine' ou 'journee'
@@ -264,16 +264,25 @@ const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw_O3_yBaQJ6Q
 
 /**
  * Fetch orders from Google Apps Script
+ * Returns the data instead of setting global state directly
  */
 async function fetchOrdersFromGoogleSheet() {
     if (GOOGLE_SCRIPT_URL === 'YOUR_GOOGLE_SCRIPT_URL_HERE') {
-        console.warn('⚠️ Google Script URL not set. Using local demo data.');
-        loadLocalOrders();
-        return;
+        console.warn('⚠️ Google Script URL not set.');
+        throw new Error('URL not configured');
     }
 
     try {
-        const response = await fetch(GOOGLE_SCRIPT_URL);
+        // Timeout de 20 secondes
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        
+        // Add cache-busting timestamp to prevent caching old data
+        const response = await fetch(`${GOOGLE_SCRIPT_URL}?t=${new Date().getTime()}`, {
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
         
         // Read text first to debug if it's not JSON
         const responseText = await response.text();
@@ -284,9 +293,7 @@ async function fetchOrdersFromGoogleSheet() {
 
         // Check if response is HTML (error page) instead of JSON
         if (responseText.trim().startsWith('<')) {
-            console.error('❌ Google Script returned HTML instead of JSON. Likely an auth/permission issue.');
-            console.error('Check: Deploy as "Me", Access: "Anyone".');
-            console.debug('Response preview:', responseText.substring(0, 500));
+            console.error('❌ Google Script returned HTML instead of JSON.');
             throw new Error('Invalid JSON response (HTML received)');
         }
         
@@ -305,21 +312,34 @@ async function fetchOrdersFromGoogleSheet() {
 
         console.log(`✅ Data fetched from Google Sheet: ${data.length} rows`);
 
-        commandes = data
+        const fetchedOrders = data
             .map(row => mapGoogleSheetRowToOrder(row))
             .filter(cmd => {
-                // Filter logic similar to legacy
-                const status = cmd.statut ? cmd.statut.toLowerCase().trim() : '';
-                return status === 'en cours' || status === 'en prépa' || status === 'planifiée';
+                if (!cmd.statut) return false;
+                
+                // Normalisation plus stricte pour comparaison
+                // Enlève les accents pour être sûr (prépa -> prepa)
+                const status = cmd.statut.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                
+                // Filtre permissif : si le mot clé est DEDANS, on prend
+                if (status.includes('cours')) return true;   // En cours, En-cours...
+                if (status.includes('prepa')) return true;   // En prépa, Préparation...
+                if (status.includes('planifi')) return true; // Planifiée, Planifié...
+                
+                return false;
             });
 
-        console.log(`✅ Orders loaded (Live): ${commandes.length} active orders`);
-        refresh();
+        console.log(`✅ Orders fetched (Live): ${fetchedOrders.length} active orders`);
+        
+        if (fetchedOrders.length === 0 && data.length > 0) {
+            console.warn("⚠️ Attention : 0 commande chargée alors que le Sheet contient des données. Vérifiez les statuts.");
+        }
+
+        return fetchedOrders;
 
     } catch (error) {
         console.error('❌ Error fetching from Google Sheet:', error);
-        console.log('⚠️ Falling back to local data.');
-        loadLocalOrders();
+        throw error; // Re-throw for SyncManager
     }
 }
 
@@ -1516,14 +1536,14 @@ function renderVueJournee() {
                     <!-- New Top Stats Header -->
                     <div class="day-stat-header">
                         <div class="stat-row">
-                            <span>Charge: ${capacityInfo.pourcentage}%</span>
+                            <span>Charge: ${Math.round(capacityInfo.pourcentage)}%</span>
                             <span class="${isOverCapacity ? 'text-danger' : ''}">
-                                ${capacityInfo.heuresUtilisees}h / ${capacityInfo.capaciteJour}h
+                                ${Math.round(capacityInfo.heuresUtilisees)}h / ${capacityInfo.capaciteJour}h
                                 ${isOverCapacity ? '⚠️' : ''}
                             </span>
                         </div>
                         <div class="stat-progress">
-                            <div class="stat-progress-bar ${capacityClass}" style="width: ${Math.min(100, capacityInfo.pourcentage)}%"></div>
+                            <div class="stat-progress-bar ${capacityClass}" style="width: ${Math.min(100, Math.round(capacityInfo.pourcentage))}%"></div>
                         </div>
                     </div>
 
@@ -1560,46 +1580,96 @@ function renderVueJournee() {
             // Create hourly time grid (background)
             html += '<div class="time-grid">';
             // Generate time slots based on day
-            const startHour = Math.floor(startHourTimeline);
-            const endHour = Math.ceil(endHourTimeline);
-            for (let hour = startHour; hour < endHour; hour++) {
-                // For 7:30 start, show 07:30, 08:30, 09:30...
-                const minute = (hour === startHour && day !== 'Vendredi') ? '30' : '00';
-                const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
-                html += `
-                    <div class="time-slot drop-zone"
-                         data-machine="${machine}"
-                         data-day="${day}"
-                         data-week="${semaineSelectionnee}"
-                         data-hour="${hour}"
-                         data-time="${timeSlot}">
-                        <div class="time-label">${timeSlot}</div>
-                    </div>
-                `;
+            // Each slot = 1 hour = 60px
+            // For Mon-Thu: start at 07:30, show hourly marks at 07:30, 08:30, 09:30... 16:30
+            // For Friday: start at 07:00, show hourly marks at 07:00, 08:00, 09:00... 12:00
+
+            if (day === 'Vendredi') {
+                // Friday: 07:00-12:00 (5 slots of 1 hour each)
+                for (let hour = 7; hour < 12; hour++) {
+                    const timeSlot = `${hour.toString().padStart(2, '0')}:00`;
+                    html += `
+                        <div class="time-slot drop-zone"
+                             data-machine="${machine}"
+                             data-day="${day}"
+                             data-week="${semaineSelectionnee}"
+                             data-hour="${hour}"
+                             data-time="${timeSlot}">
+                            <div class="time-label">${timeSlot}</div>
+                        </div>
+                    `;
+                }
+            } else {
+                // Mon-Thu: 07:30-16:30 (9 slots of 1 hour each)
+                // Show: 07:30, 08:30, 09:30, 10:30, 11:30, 12:30, 13:30, 14:30, 15:30
+                for (let i = 0; i < 9; i++) {
+                    const hourDecimal = 7.5 + i; // 7.5, 8.5, 9.5... 15.5
+                    const hour = Math.floor(hourDecimal);
+                    const minute = (hourDecimal % 1 === 0.5) ? '30' : '00';
+                    const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
+                    html += `
+                        <div class="time-slot drop-zone"
+                             data-machine="${machine}"
+                             data-day="${day}"
+                             data-week="${semaineSelectionnee}"
+                             data-hour="${hourDecimal}"
+                             data-time="${timeSlot}">
+                            <div class="time-label">${timeSlot}</div>
+                        </div>
+                    `;
+                }
             }
             html += '</div>';
 
             // Overlay operations with absolute positioning
             html += '<div class="operations-overlay">';
-            
-            // Add lunch break visual for Mon-Thu
+
+            // Add lunch break visual for Mon-Thu (12:30-13:00)
             if (day !== 'Vendredi') {
-                const startHourTimeline = 7.5; // 07:30
-                const lunchStart = 12.5; // 12:30
-                const lunchDuration = 0.5; // 30min
-                const topLunch = (lunchStart - startHourTimeline) * 60;
-                const heightLunch = lunchDuration * 60;
-                
+                // Pause: 12:30-13:00
+                const lunchStartDecimal = 12.5; // 12:30 in decimal
+                const lunchEndDecimal = 13.0;   // 13:00 in decimal
+
+                // Calculate position from timeline start (07:30 = 7.5)
+                // 12:30 is 5 hours after 07:30
+                const topLunch = (lunchStartDecimal - startHourTimeline) * 60;
+                const heightLunch = (lunchEndDecimal - lunchStartDecimal) * 60;
+
+                console.log(`🍽️ Pause déjeuner: ${day} | start=${lunchStartDecimal}h | timeline=${startHourTimeline}h | top=${topLunch}px | height=${heightLunch}px`);
+
                 html += `
                     <div class="lunch-break" style="top: ${topLunch}px; height: ${heightLunch}px;"></div>
                 `;
             }
 
+            // 🔴 Add Current Time Line (Red Line)
+            // Check if this column represents "Today"
+            const today = new Date();
+            const currentWeekNum = getWeekNumber(today);
+            // Map JS day (0=Sun, 1=Mon) to our DAYS_OF_WEEK strings
+            const dayMap = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+            const currentDayName = dayMap[today.getDay()];
+
+            if (semaineSelectionnee === currentWeekNum && day === currentDayName) {
+                // It's today! Calculate position.
+                const nowHour = today.getHours();
+                const nowMin = today.getMinutes();
+                const nowDecimal = nowHour + (nowMin / 60);
+
+                // Only show if within working hours view
+                if (nowDecimal >= startHourTimeline && nowDecimal <= endHourTimeline) {
+                    const topPos = (nowDecimal - startHourTimeline) * 60;
+                    html += `<div class="current-time-line" style="top: ${topPos}px;" title="Il est ${nowHour}h${nowMin}"></div>`;
+                }
+            }
+
             slots.forEach(slot => {
+                // Convert HH:MM to decimal hours for precise positioning
+                // Example: "09:09" => 9 + 9/60 = 9.15
                 const startHour = parseInt(slot.heureDebut.split(':')[0]);
                 const startMinute = parseInt(slot.heureDebut.split(':')[1]);
                 const startDecimal = startHour + (startMinute / 60);
-                
+
                 // Calculate end time decimal
                 const endHourParts = slot.heureFin.split(':');
                 const endDecimal = parseInt(endHourParts[0]) + parseInt(endHourParts[1]) / 60;
@@ -1610,12 +1680,21 @@ function renderVueJournee() {
                 const crossesLunch = day !== 'Vendredi' && startDecimal < lunchStart && endDecimal > lunchEnd;
 
                 const renderSlotDiv = (sTime, eTime, isSplitPart = false) => {
-                    const sH = Math.floor(sTime);
-                    const sM = Math.round((sTime - sH) * 60);
-                    // Position relative to timeline start (7.5 or 7.0)
+                    // Position relative to timeline start
+                    // startHourTimeline is 7.5 for Mon-Thu (07:30) or 7.0 for Fri (07:00)
+                    // Example: if sTime=9.15 (09:09) and startHourTimeline=7.5 (07:30)
+                    //   startOffsetHours = 9.15 - 7.5 = 1.65 hours after start
+                    //   topPosition = 1.65 * 60px/hour = 99px from top
                     const startOffsetHours = sTime - startHourTimeline;
-                    const topPosition = startOffsetHours * 60;
-                    const heightInPixels = (eTime - sTime) * 60;
+                    const topPosition = Math.round(startOffsetHours * 60);  // 60px per hour, rounded to nearest pixel
+                    const heightInPixels = Math.round((eTime - sTime) * 60);
+
+                    // Debug log for position verification
+                    if (slot.heureDebut === slot.heureDebut) { // Always true, just for grouping
+                        console.log(`📍 Position: ${slot.operationType} ${slot.heureDebut}-${slot.heureFin} | ` +
+                                    `sTime=${sTime.toFixed(2)}h | startTimeline=${startHourTimeline}h | ` +
+                                    `offset=${startOffsetHours.toFixed(2)}h | top=${topPosition}px`);
+                    }
                     
                     // Specific class for split parts to look connected?
                     // Maybe just same styling.
@@ -2286,6 +2365,282 @@ function showCommandeDetails(commandeId) {
 }
 
 // ===================================
+// Toast Notification System
+// ===================================
+
+const Toast = {
+    success(message) {
+        this.show(message, 'success', '✓');
+    },
+    
+    error(message) {
+        this.show(message, 'error', '✗');
+    },
+    
+    warning(message) {
+        this.show(message, 'warning', '⚠');
+    },
+    
+    info(message) {
+        this.show(message, 'info', 'ℹ');
+    },
+    
+    show(message, type, icon) {
+        // Supprimer les toasts existants
+        document.querySelectorAll('.toast').forEach(t => t.remove());
+        
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.innerHTML = `
+            <span class="toast-icon">${icon}</span>
+            <span class="toast-message">${message}</span>
+        `;
+        
+        document.body.appendChild(toast);
+        
+        // Auto-remove après 3 secondes
+        setTimeout(() => {
+            toast.classList.add('fade-out');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+};
+
+// ===================================
+// Data Sync Manager (Hybrid Architecture)
+// ===================================
+
+class DataSyncManager {
+    constructor() {
+        this.syncInterval = null;
+        this.lastSyncTime = null;
+        this.syncStatus = 'unknown'; // 'synced', 'offline', 'error', 'syncing'
+        this.STORAGE_KEY = 'etm_commandes_v2';
+        this.BACKUP_KEY = 'etm_commandes_backup';
+    }
+
+    // Méthode 1: Initialisation
+    async init() {
+        // 1. Charger données locales (localStorage) IMMÉDIATEMENT
+        this.loadLocalData();
+        
+        // 2. Tenter sync Google Sheets en arrière-plan (SANS AWAIT pour ne pas bloquer l'UI)
+        this.syncWithGoogleSheets();
+        
+        // 3. Démarrer auto-sync périodique (toutes les 5 minutes)
+        this.startAutoSync();
+    }
+
+    // Méthode 2: Chargement local
+    loadLocalData() {
+        try {
+            const stored = localStorage.getItem(this.STORAGE_KEY);
+            if (stored) {
+                const data = JSON.parse(stored);
+                // Basic validation
+                if (Array.isArray(data)) {
+                    commandes = data;
+                    console.log(`✅ Loaded ${commandes.length} orders from Local Storage.`);
+                    this.updateSyncIndicator('offline', 'Données locales');
+                    refresh(); // Render immediately
+                }
+            } else {
+                console.log('ℹ️ No local data found. Loading demo/legacy.');
+                loadLocalOrders(); // Fallback to CSV string in app.js
+            }
+        } catch (e) {
+            console.error('❌ Error loading local data:', e);
+            loadLocalOrders();
+        }
+    }
+
+    // Méthode 3: Sync avec Google Sheets
+    async syncWithGoogleSheets() {
+        this.updateSyncIndicator('syncing', 'Synchronisation...');
+        
+        try {
+            const remoteData = await fetchOrdersFromGoogleSheet();
+            
+            if (remoteData && remoteData.length > 0) {
+                // Merge logic
+                this.mergeData(commandes, remoteData);
+                
+                this.saveLocalData();
+                this.updateSyncIndicator('synced', 'Synchronisé');
+                this.lastSyncTime = new Date();
+                refresh();
+                Toast.success('Données synchronisées avec succès');
+            } else {
+                throw new Error('No data received');
+            }
+        } catch (error) {
+            console.error('Sync failed:', error);
+            this.updateSyncIndicator('error', 'Erreur Sync (Mode Hors ligne)');
+            Toast.warning('Synchronisation échouée. Mode hors ligne activé.');
+        }
+    }
+
+    // Méthode 5: Merge intelligent
+    mergeData(localData, remoteData) {
+        // Stratégie:
+        // - Remote est maître pour la liste des commandes et leurs détails (poids, délais)
+        // - Local est maître pour le PLANNING (slots) car le Sheet V1 ne les a pas
+        
+        const localMap = new Map(localData.map(c => [c.id, c]));
+        
+        // On reconstruit la liste commandes en se basant sur le Remote
+        const merged = remoteData.map(remoteCmd => {
+            const localCmd = localMap.get(remoteCmd.id);
+            
+            if (localCmd) {
+                // La commande existe déjà en local -> On préserve le planning (slots)
+                remoteCmd.operations.forEach(remoteOp => {
+                    const localOp = localCmd.operations.find(op => op.type === remoteOp.type);
+                    if (localOp && localOp.slots && localOp.slots.length > 0) {
+                        // On garde les slots locaux
+                        remoteOp.slots = localOp.slots;
+                        remoteOp.statut = localOp.statut;
+                        remoteOp.progressionReelle = localOp.progressionReelle;
+                    }
+                });
+                
+                // Si la commande était "Planifiée" localement, on garde ce statut global
+                // sauf si le remote dit "Livrée" ou "Terminée" (force override)
+                if (localCmd.statut === 'Planifiée' && remoteCmd.statut !== 'Livrée' && remoteCmd.statut !== 'Terminée') {
+                    remoteCmd.statut = 'Planifiée';
+                }
+            }
+            return remoteCmd;
+        });
+        
+        commandes = merged;
+        console.log('✅ Merge completed.');
+    }
+
+    // Méthode 6: Sauvegarde locale
+    saveLocalData() {
+        try {
+            const dataStr = JSON.stringify(commandes);
+            localStorage.setItem(this.STORAGE_KEY, dataStr);
+            // Backup occasionnel
+            if (Math.random() < 0.1) { // 10% chance
+                localStorage.setItem(this.BACKUP_KEY, dataStr);
+            }
+        } catch (e) {
+            console.error('❌ Quota exceeded or save error:', e);
+            Toast.error('Erreur sauvegarde locale (Quota ?)');
+        }
+    }
+
+    // Méthode 7: Auto-sync périodique
+    startAutoSync() {
+        if (this.syncInterval) clearInterval(this.syncInterval);
+        this.syncInterval = setInterval(() => {
+            this.syncWithGoogleSheets();
+        }, 5 * 60 * 1000); // 5 minutes
+    }
+
+    // Méthode 8: Sync manuelle
+    manualSync() {
+        Toast.info('Synchronisation en cours...');
+        this.syncWithGoogleSheets();
+    }
+
+    // Méthode 9: Mise à jour indicateur UI
+    updateSyncIndicator(status, message) {
+        const el = document.getElementById('syncIndicator');
+        if (!el) return;
+        
+        el.className = `sync-indicator sync-${status}`;
+        let icon = '❓';
+        if (status === 'synced') icon = '✓';
+        if (status === 'syncing') icon = '↻';
+        if (status === 'offline') icon = '⚠';
+        if (status === 'error') icon = '✗';
+        
+        el.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+    }
+
+    // Méthode 10: Export
+    exportLocalData() {
+        const dataStr = JSON.stringify({
+            version: '2.0',
+            date: new Date().toISOString(),
+            commandes: commandes
+        }, null, 2);
+        
+        const blob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `etm_prod_backup_${new Date().toISOString().slice(0,10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        Toast.success('Export réussi');
+    }
+
+    // Méthode 11: Import
+    importLocalData(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const json = JSON.parse(e.target.result);
+                if (json.commandes && Array.isArray(json.commandes)) {
+                    commandes = json.commandes;
+                    this.saveLocalData();
+                    refresh();
+                    Toast.success('Import réussi');
+                } else {
+                    throw new Error('Format invalide');
+                }
+            } catch (err) {
+                console.error(err);
+                Toast.error('Erreur lors de l\'import');
+            }
+        };
+        reader.readAsText(file);
+    }
+}
+
+/**
+ * Initialize sync event handlers
+ */
+function initSyncHandlers() {
+    // Bouton sync manuelle
+    document.getElementById('btnSyncNow')?.addEventListener('click', () => {
+        syncManager.manualSync();
+    });
+    
+    // Bouton export
+    document.getElementById('btnExportData')?.addEventListener('click', () => {
+        syncManager.exportLocalData();
+    });
+    
+    // Bouton import
+    document.getElementById('btnImportData')?.addEventListener('click', () => {
+        document.getElementById('fileImport')?.click();
+    });
+    
+    // Input file import
+    document.getElementById('fileImport')?.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            syncManager.importLocalData(e.target.files[0]);
+        }
+    });
+    
+    // Toggle dropdown menu
+    document.getElementById('btnDataMenu')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelector('.dropdown')?.classList.toggle('active');
+    });
+    
+    // Fermer dropdown si clic ailleurs
+    document.addEventListener('click', () => {
+        document.querySelector('.dropdown.active')?.classList.remove('active');
+    });
+}
+
+// ===================================
 // View Toggle
 // ===================================
 
@@ -2308,9 +2663,14 @@ function toggleVue(vue) {
 }
 
 /**
- * Refresh all views
+ * Refresh all views (Modified for Auto-Save)
  */
 function refresh() {
+    // Sauvegarder automatiquement à chaque changement majeur (re-render)
+    if (typeof syncManager !== 'undefined') {
+        syncManager.saveLocalData();
+    }
+
     if (vueActive === 'semaine') {
         renderVueSemaine();
     } else {
@@ -2389,26 +2749,38 @@ function initEventHandlers() {
 // Initialization
 // ===================================
 
+const syncManager = new DataSyncManager();
+
 /**
  * Initialize the application
  */
-function init() {
+async function init() {
     console.log('🏭 ETM PROD V2 - Planning de Production');
     console.log(`📅 Date de référence: ${currentTime.toLocaleString('fr-FR')}`);
 
-    // Load orders from CSV
-    loadOrders();
+    // Safe initialization of UI components
+    if (typeof updateCurrentTime === 'function') updateCurrentTime();
+    if (typeof initEventHandlers === 'function') initEventHandlers();
+    if (typeof initSyncHandlers === 'function') initSyncHandlers();
+
+    // Initialiser le système de sync hybride (charge local d'abord, puis tente remote)
+    try {
+        if (typeof syncManager !== 'undefined') {
+            await syncManager.init();
+        } else {
+            console.error("Critical: syncManager is not defined");
+            loadOrders(); // Ultra-fallback
+        }
+    } catch (e) {
+        console.error("Critical: Sync Manager Init failed", e);
+        if (typeof syncManager !== 'undefined') syncManager.loadLocalData(); 
+    }
 
     console.log(`✅ Commandes actives: ${getActiveOrders().length}/${commandes.length}`);
     console.log(`📦 Commandes placées: ${getPlacedOrders().length}`);
     console.log(`⏳ Commandes non placées: ${getUnplacedOrders().length}`);
 
-    updateCurrentTime();
-    renderVueSemaine();
-    renderCommandesNonPlacees();
-    initEventHandlers();
-
-    console.log('✅ Application V2 initialisée');
+    console.log('✅ Application V2 initialisée avec sync hybride');
 }
 
 // Start the application when DOM is ready

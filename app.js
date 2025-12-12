@@ -1764,6 +1764,13 @@ function renderCommandesNonPlacees() {
     const container = document.getElementById('unplacedOrdersContainer');
     const unplacedOrders = getUnplacedOrders();
 
+    // Sort by dateLivraison (urgent first)
+    unplacedOrders.sort((a, b) => {
+        const dateA = new Date(a.dateLivraison);
+        const dateB = new Date(b.dateLivraison);
+        return dateA - dateB;
+    });
+
     if (unplacedOrders.length === 0) {
         container.innerHTML = '<p class="no-orders">Aucune commande à placer</p>';
         return;

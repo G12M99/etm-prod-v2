@@ -258,6 +258,9 @@ async function fetchOrdersFromGoogleSheet() {
         throw new Error('URL not configured');
     }
 
+    console.time('FetchGoogleSheet');
+    console.log(`📡 Fetching data from Google Sheet at ${new Date().toLocaleTimeString()}...`);
+
     try {
         // Timeout de 20 secondes
         const controller = new AbortController();
@@ -269,6 +272,7 @@ async function fetchOrdersFromGoogleSheet() {
         });
         
         clearTimeout(timeoutId);
+        console.timeEnd('FetchGoogleSheet');
         
         // Read text first to debug if it's not JSON
         const responseText = await response.text();
@@ -2543,12 +2547,22 @@ class DataSyncManager {
         // - Local est maître pour le PLANNING (slots) car le Sheet V1 ne les a pas
         
         const localMap = new Map(localData.map(c => [c.id, c]));
+        let updatedCount = 0;
+        let newCount = 0;
         
         // On reconstruit la liste commandes en se basant sur le Remote
         const merged = remoteData.map(remoteCmd => {
             const localCmd = localMap.get(remoteCmd.id);
             
             if (localCmd) {
+                // Detection simple de changement (pour l'info utilisateur)
+                // Note: remoteCmd contient déjà les nouvelles valeurs du Sheet (Poids, Date, etc.)
+                if (localCmd.poids !== remoteCmd.poids || 
+                    localCmd.dateLivraison !== remoteCmd.dateLivraison ||
+                    localCmd.statut !== remoteCmd.statut) {
+                    updatedCount++;
+                }
+
                 // La commande existe déjà en local -> On préserve le planning (slots)
                 remoteCmd.operations.forEach(remoteOp => {
                     const localOp = localCmd.operations.find(op => op.type === remoteOp.type);
@@ -2565,12 +2579,20 @@ class DataSyncManager {
                 if (localCmd.statut === 'Planifiée' && remoteCmd.statut !== 'Livrée' && remoteCmd.statut !== 'Terminée') {
                     remoteCmd.statut = 'Planifiée';
                 }
+            } else {
+                newCount++;
             }
             return remoteCmd;
         });
         
         commandes = merged;
-        console.log('✅ Merge completed.');
+        console.log(`✅ Merge: ${newCount} nouvelles, ${updatedCount} mises à jour.`);
+        
+        if (newCount > 0 || updatedCount > 0) {
+            Toast.success(`Sync: ${newCount} nouvelles, ${updatedCount} mises à jour.`);
+        } else {
+            Toast.info('Sync: Aucune modification de données détectée.');
+        }
     }
 
     // Méthode 6: Sauvegarde locale

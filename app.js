@@ -2770,6 +2770,35 @@ async function init() {
     if (typeof initEventHandlers === 'function') initEventHandlers();
     if (typeof initSyncHandlers === 'function') initSyncHandlers();
 
+    // Start clock (Real-time update)
+    setInterval(() => {
+        // Update global time
+        currentTime = new Date();
+        
+        // Update display
+        if (typeof updateCurrentTime === 'function') updateCurrentTime();
+
+        // Refresh views if needed (and not dragging)
+        if (!draggedOperation) {
+            // Update sidebar urgency
+            renderCommandesNonPlacees();
+
+            // Update Day View (Red Line)
+            if (vueActive === 'journee') {
+                const wrapper = document.querySelector('.planning-wrapper');
+                const scrollTop = wrapper ? wrapper.scrollTop : 0;
+                const scrollLeft = wrapper ? wrapper.scrollLeft : 0;
+                
+                renderVueJournee();
+                
+                if (wrapper) {
+                    wrapper.scrollTop = scrollTop;
+                    wrapper.scrollLeft = scrollLeft;
+                }
+            }
+        }
+    }, 60000); // Every minute
+
     // Initialiser le système de sync hybride (charge local d'abord, puis tente remote)
     try {
         if (typeof syncManager !== 'undefined') {

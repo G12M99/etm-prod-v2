@@ -1117,9 +1117,10 @@ function findNextGap(machine, jour, semaine, minTimeStr = null) {
 /**
  * Find best machine for an operation based on load and availability
  * @param {number} durationNeeded - Duration we are trying to place (can be partial)
+ * @param {Object} globalMinStart - { week: number, dayIndex: number, timeStr: string } constraint
  * @returns {Object|null} {machine, week, day, startTime, usableDuration} or null
  */
-function findBestMachineSlot(operation, cmd, machinesList, durationNeeded = null) {
+function findBestMachineSlot(operation, cmd, machinesList, durationNeeded = null, globalMinStart = null) {
     if (durationNeeded === null) durationNeeded = operation.dureeTotal;
 
     // 🔒 CONSTRAINT: Same Machine Priority
@@ -1137,10 +1138,16 @@ function findBestMachineSlot(operation, cmd, machinesList, durationNeeded = null
 
     // Scan all possible slots
     for (let week = 50; week <= 52; week++) {
+        // 🔒 Global Date Filter (Week)
+        if (globalMinStart && week < globalMinStart.week) continue;
+
         // Get machines sorted by load (irrelevant if machinesList has length 1)
         const sortedMachines = getMachinesByLoadOrder(machinesList, week);
 
         for (let dayIdx = 0; dayIdx < DAYS_OF_WEEK.length; dayIdx++) {
+            // 🔒 Global Date Filter (Day)
+            if (globalMinStart && week === globalMinStart.week && dayIdx < globalMinStart.dayIndex) continue;
+
             const day = DAYS_OF_WEEK[dayIdx];
             
             // Check chronologically against previous operation (Standard Flow)
@@ -1148,6 +1155,11 @@ function findBestMachineSlot(operation, cmd, machinesList, durationNeeded = null
 
             for (let machine of sortedMachines) {
                 let minTimeStr = null;
+
+                // 🔒 Global Time Filter (Time) - Only applies if we are on the specific Start Day
+                if (globalMinStart && week === globalMinStart.week && dayIdx === globalMinStart.dayIndex) {
+                    minTimeStr = globalMinStart.timeStr;
+                }
                 
                 // 1. Check Previous Operation (Standard Chronology)
                 const opIndex = cmd.operations.indexOf(operation);
@@ -1157,7 +1169,10 @@ function findBestMachineSlot(operation, cmd, machinesList, durationNeeded = null
                         const lastSlot = prevOp.slots[prevOp.slots.length - 1];
                         // If prev op finishes this week/day
                         if (lastSlot.semaine === week && lastSlot.jour === day) {
-                             minTimeStr = lastSlot.heureFin;
+                             // Take the LATER of the two times
+                             if (!minTimeStr || timeToDecimalHours(lastSlot.heureFin) > timeToDecimalHours(minTimeStr)) {
+                                 minTimeStr = lastSlot.heureFin;
+                             }
                         }
                         // If prev op finishes LATER than this day, skip this day
                          const prevEndDate = getDateFromWeekDay(lastSlot.semaine, lastSlot.jour, lastSlot.heureFin);
@@ -2288,6 +2303,35 @@ function placerAutomatiquement(commandeId) {
         return;
     }
 
+    // 🕒 RUSH HOUR LOGIC
+    let globalMinStart = null;
+    const now = new Date(); // Use system time
+    
+    const currentWeek = getWeekNumber(now);
+    let currentDayIndex = now.getDay() - 1; // 0=Mon, 4=Fri, -1=Sun
+    if (currentDayIndex === -1) currentDayIndex = 6;
+    
+    const currentHour = now.getHours() + now.getMinutes() / 60;
+    
+    // Define Rush Hour Windows: 09:00-10:00 OR 12:00-13:30
+    const isRushHour = (currentHour >= 9 && currentHour < 10) || (currentHour >= 12 && currentHour < 13.5);
+    
+    // Only apply logic if Today is a working day (Mon-Fri) and within simulation range (50-52)
+    // Note: In a real app, week range would be dynamic.
+    if (currentDayIndex >= 0 && currentDayIndex < 5 && currentWeek >= 50 && currentWeek <= 52) {
+        if (isRushHour) {
+            // "Fait a la date d'aujourd'hui" => Force Start Today at 00:00 (allow filling morning gaps)
+            globalMinStart = { week: currentWeek, dayIndex: currentDayIndex, timeStr: "00:00" };
+            console.log("🚀 Rush Hour Mode: Prioritizing Today (filling gaps from start of day)!");
+            Toast.info("Mode Prioritaire : Placement sur la journée en cours");
+        } else {
+            // "Sinon... ne peut pas placer avant celle-ci" => Start from NOW
+            const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+            globalMinStart = { week: currentWeek, dayIndex: currentDayIndex, timeStr: timeStr };
+            console.log(`🕒 Standard Mode: Starting search from ${timeStr}`);
+        }
+    }
+
     // For each operation, find BEST machine slot (load-balanced)
     // Use for...of to allow breaking if an operation fails
     for (const operation of cmd.operations) {
@@ -2306,7 +2350,8 @@ function placerAutomatiquement(commandeId) {
         while (remainingDuration > 0.01) { // 0.01 tolerance for float math
             
             // 🎯 Find best slot for remaining duration (or largest available chunk)
-            const bestSlot = findBestMachineSlot(operation, cmd, availableMachines, remainingDuration);
+            // Pass globalMinStart to constrain search
+            const bestSlot = findBestMachineSlot(operation, cmd, availableMachines, remainingDuration, globalMinStart);
             
             if (!bestSlot) {
                 console.warn(`⚠️ Impossible de placer une partie de l'opération ${operation.type} (${remainingDuration}h) de la commande ${cmd.id}`);

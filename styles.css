@@ -203,6 +203,16 @@ body {
     color: var(--color-text);
 }
 
+.btn-danger {
+    background-color: var(--color-capacity-danger);
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #c82333;
+    box-shadow: var(--shadow-sm);
+}
+
 /* ===================================
    Main Content V2
    =================================== */
@@ -1311,6 +1321,94 @@ body {
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     line-height: 1.6;
+}
+
+/* ===================================
+   Vue Liste (New View)
+   =================================== */
+
+.vue-liste {
+    background-color: var(--color-surface);
+    border-radius: var(--border-radius);
+    margin: var(--spacing-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    padding: var(--spacing-md);
+}
+
+.table-responsive {
+    overflow-x: auto;
+    width: 100%;
+}
+
+.commands-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm);
+}
+
+.commands-table th,
+.commands-table td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.commands-table th {
+    background-color: #f8f9fa;
+    font-weight: 700;
+    color: var(--color-text-secondary);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.commands-table tr:hover {
+    background-color: #f8f9fa;
+}
+
+.status-badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.status-badge.planifiee {
+    background-color: #d1e7dd;
+    color: #0f5132;
+}
+
+.status-badge.en-cours {
+    background-color: #cff4fc;
+    color: #055160;
+}
+
+.status-badge.non-placee {
+    background-color: #f8d7da;
+    color: #842029;
+}
+
+.status-badge.livree {
+    background-color: #e2e3e5;
+    color: #41464b;
+}
+
+.planning-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+}
+
+.planning-status.in-planning {
+    color: var(--color-cisaillage);
+}
+
+.planning-status.not-in-planning {
+    color: var(--color-text-secondary);
+    opacity: 0.5;
 }
 
 /* ===================================

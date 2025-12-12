@@ -1136,8 +1136,9 @@ function findBestMachineSlot(operation, cmd, machinesList, durationNeeded = null
     const candidates = [];
     let rejectedCount = 0;
 
-    // Scan all possible slots
-    for (let week = 50; week <= 52; week++) {
+    // Scan all possible slots (Dynamic Horizon: Current Week + 3 weeks)
+    const currentWeek = getWeekNumber(new Date());
+    for (let week = currentWeek; week <= currentWeek + 3; week++) {
         // 🔒 Global Date Filter (Week)
         if (globalMinStart && week < globalMinStart.week) continue;
 
@@ -1461,7 +1462,9 @@ function getCommandeOperations(commandeId) {
  */
 function renderVueSemaine() {
     const container = document.getElementById('planningContainer');
-    const weeks = [50, 51, 52];
+    // Dynamic weeks based on current date
+    const currentWeek = getWeekNumber(new Date());
+    const weeks = [currentWeek, currentWeek + 1, currentWeek + 2];
 
     let html = '<div class="vue-semaine">';
 
@@ -1842,8 +1845,12 @@ function renderCommandesNonPlacees() {
 
     // Sort by dateLivraison (urgent first)
     unplacedOrders.sort((a, b) => {
-        const dateA = new Date(a.dateLivraison);
-        const dateB = new Date(b.dateLivraison);
+        const dateA = a.dateLivraison ? new Date(a.dateLivraison) : new Date(8640000000000000); // Max Date
+        const dateB = b.dateLivraison ? new Date(b.dateLivraison) : new Date(8640000000000000);
+        
+        if (isNaN(dateA.getTime())) return 1; // A is invalid -> push to bottom
+        if (isNaN(dateB.getTime())) return -1; // B is invalid -> push A to top
+        
         return dateA - dateB;
     });
 
@@ -2316,9 +2323,9 @@ function placerAutomatiquement(commandeId) {
     // Define Rush Hour Windows: 09:00-10:00 OR 12:00-13:30
     const isRushHour = (currentHour >= 9 && currentHour < 10) || (currentHour >= 12 && currentHour < 13.5);
     
-    // Only apply logic if Today is a working day (Mon-Fri) and within simulation range (50-52)
-    // Note: In a real app, week range would be dynamic.
-    if (currentDayIndex >= 0 && currentDayIndex < 5 && currentWeek >= 50 && currentWeek <= 52) {
+    // Only apply logic if Today is a working day (Mon-Fri)
+    // Dynamic: Works for any week
+    if (currentDayIndex >= 0 && currentDayIndex < 5) {
         if (isRushHour) {
             // "Fait a la date d'aujourd'hui" => Force Start Today at 00:00 (allow filling morning gaps)
             globalMinStart = { week: currentWeek, dayIndex: currentDayIndex, timeStr: "00:00" };
@@ -2330,6 +2337,10 @@ function placerAutomatiquement(commandeId) {
             globalMinStart = { week: currentWeek, dayIndex: currentDayIndex, timeStr: timeStr };
             console.log(`🕒 Standard Mode: Starting search from ${timeStr}`);
         }
+    } else {
+        // Weekend (Samedi/Dimanche) => Start from Next Monday 00:00
+        globalMinStart = { week: currentWeek + 1, dayIndex: 0, timeStr: "00:00" };
+        console.log("📅 Week-end : Démarrage de la recherche lundi prochain");
     }
 
     // For each operation, find BEST machine slot (load-balanced)
@@ -3000,6 +3011,9 @@ const syncManager = new DataSyncManager();
 async function init() {
     console.log('🏭 ETM PROD V2 - Planning de Production');
     console.log(`📅 Date de référence: ${currentTime.toLocaleString('fr-FR')}`);
+
+    // Set initial selected week to current week
+    semaineSelectionnee = getWeekNumber(currentTime);
 
     // Safe initialization of UI components
     if (typeof updateCurrentTime === 'function') updateCurrentTime();

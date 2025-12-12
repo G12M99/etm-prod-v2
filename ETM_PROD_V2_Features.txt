@@ -1,0 +1,82 @@
+ETM PROD V2 - DOCUMENTATION FONCTIONNELLE
+=========================================
+
+1. OBJECTIF DE L'APPLICATION
+   Application web de planification de production pour atelier de pliage (tôlerie).
+   Permet de gérer et placer des commandes clients sur des machines spécifiques en respectant des contraintes de production strictes.
+
+2. INTERFACE ET NAVIGATION
+   - Système "Single Page Application" (SPA) sans rechargement.
+   - Trois vues principales accessibles via boutons en haut à droite :
+     * Vue Semaine : Vision globale de la charge sur 3 semaines dynamiques (semaine courante + 2). Jauges de capacité par machine.
+     * Vue Journée : Planning détaillé heure par heure avec grille temporelle et drag & drop.
+     * Vue Liste : Tableau récapitulatif de toutes les commandes avec statuts globaux.
+   - Indicateur de temps réel :
+     * Date et heure affichées en bas à droite.
+     * Barre rouge traversante dans la Vue Journée indiquant l'heure actuelle ("Maintenant").
+     * Mise à jour automatique toutes les minutes.
+
+3. GESTION DES COMMANDES (DONNÉES)
+   - Sources de données :
+     * Synchronisation Google Sheets (via script externe).
+     * Stockage Local (LocalStorage) pour persistance hors ligne.
+     * Données de démonstration incluses si aucune source n'est disponible.
+   - Synchronisation :
+     * Bouton "Sync" manuel.
+     * Synchronisation automatique toutes les 5 minutes.
+     * Détection intelligente des modifications (nouveaux poids, dates, etc.) avec notifications.
+     * Mode "Fusion" : Met à jour les infos de la commande sans écraser le planning déjà effectué localement.
+   - Barre latérale ("Commandes à placer") :
+     * Liste des commandes non ou partiellement planifiées.
+     * Tri automatique par urgence (Date de livraison la plus proche en haut).
+     * Code couleur d'urgence :
+       - Rouge : Livraison < 5 jours.
+       - Orange : Livraison < 10 jours.
+       - Vert : Délai confortable.
+     * Affichage des opérations restantes à placer pour chaque commande.
+
+4. RÈGLES MÉTIER ET CONTRAINTES DE PRODUCTION
+   - Calcul des durées :
+     * Automatique basé sur le poids (kg) et le matériau.
+     * Coefficients :
+       - Cisaillage : 0.02h / kg
+       - Poinçonnage : 0.015h / kg
+       - Pliage : 0.025h / kg
+   - Séquence de production (Stricte) :
+     * Ordre obligatoire : Cisaillage -> Poinçonnage -> Pliage.
+     * Une opération ne peut commencer que si la précédente est TERMINÉE.
+     * Le système bloque tout placement (manuel ou auto) violant cette règle.
+   - Horaires de l'atelier :
+     * Lundi - Jeudi : 07:30 - 16:30 (Pause déjeuner 12:30 - 13:00).
+     * Vendredi : 07:00 - 12:00 (Pas de pause).
+   - Capacité Machine :
+     * Jauges visuelles (Vert 0-75%, Orange 75-95%, Rouge 96-100%).
+     * Détection de surcharge journalière.
+
+5. PLANIFICATION ET AUTOMATISATION
+   - Placement Manuel (Drag & Drop) :
+     * Glisser-déposer depuis la barre latérale vers le planning (Vue Journée).
+     * Déplacement des blocs déjà planifiés (changement d'heure/jour/machine).
+     * Contrôle de collision : Impossible de chevaucher deux opérations sur la même machine.
+     * Aimantisme : Les blocs se calent sur les créneaux horaires.
+   
+   - Placement Automatique ("Bouton Placer automatiquement") :
+     * Algorithme intelligent qui cherche le meilleur créneau disponible pour les 3 opérations d'un coup.
+     * Horizon dynamique : Recherche sur la semaine en cours + 3 semaines suivantes.
+     * Respecte l'ordre chronologique et la capacité des machines.
+     * Affinité Machine : Si une opération est scindée, elle reste prioritairement sur la même machine.
+     * Règle de Démarrage (Heure de départ) :
+       - Heures de Pointe (09h00-10h00 OU 12h00-13h30) : Priorité au rattrapage. Le système cherche des trous depuis le début de la journée (00:00).
+       - Standard (Reste du temps) : Le système ne planifie qu'à partir de l'heure actuelle (Now).
+       - Week-end : Le système commence la recherche au Lundi suivant 00:00.
+     * Découpage : Peut scinder les opérations longues si nécessaire pour rentrer dans les créneaux.
+
+6. FONCTIONNALITÉS AVANCÉES
+   - "Retirer du planning" :
+     * Disponible dans la Vue Liste.
+     * Annule toutes les opérations d'une commande et la remet dans la file d'attente (Barre latérale).
+   - Import / Export :
+     * Sauvegarde manuelle des données locales en fichier JSON.
+     * Restauration depuis un fichier JSON.
+   - Gestion des conflits :
+     * Alertes bloquantes explicites si l'utilisateur tente une action interdite (ex: Pliage avant Cisaillage).

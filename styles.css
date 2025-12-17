@@ -1324,7 +1324,7 @@ body {
 }
 
 /* ===================================
-   Vue Liste (New View)
+   Vue Liste (Enhanced)
    =================================== */
 
 .vue-liste {
@@ -1352,6 +1352,7 @@ body {
     padding: 12px 16px;
     text-align: left;
     border-bottom: 1px solid var(--color-border);
+    vertical-align: middle;
 }
 
 .commands-table th {
@@ -1409,6 +1410,92 @@ body {
 .planning-status.not-in-planning {
     color: var(--color-text-secondary);
     opacity: 0.5;
+}
+
+/* Enhanced List Controls */
+.search-input {
+    padding: 8px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-sm);
+    min-width: 250px;
+    font-size: 14px;
+}
+
+.sort-header {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    padding-right: 20px !important;
+}
+
+.sort-header:hover {
+    background-color: #e9ecef;
+}
+
+.sort-header::after {
+    content: '↕';
+    position: absolute;
+    right: 5px;
+    opacity: 0.3;
+}
+
+.sort-header.asc::after {
+    content: '↑';
+    opacity: 1;
+}
+
+.sort-header.desc::after {
+    content: '↓';
+    opacity: 1;
+}
+
+.ops-viz {
+    display: flex;
+    gap: 4px;
+}
+
+.op-dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: bold;
+    color: white;
+    background-color: #e9ecef; /* Default gray */
+    color: #adb5bd;
+}
+
+.op-dot.placed {
+    color: white;
+}
+.op-dot.cisaillage.placed { background-color: var(--color-cisaillage); }
+.op-dot.poinconnage.placed { background-color: var(--color-poinconnage); }
+.op-dot.pliage.placed { background-color: var(--color-pliage); }
+
+.list-stats {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    flex-wrap: wrap;
+}
+
+.stat-tag {
+    background: white;
+    padding: 4px 12px;
+    border-radius: 16px;
+    border: 1px solid var(--color-border);
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.stat-tag span {
+    font-weight: 700;
 }
 
 /* ===================================

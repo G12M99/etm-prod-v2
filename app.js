@@ -2779,8 +2779,33 @@ function initSyncHandlers() {
 // ===================================
 
 // ===================================
-// UI Rendering - Vue Liste (New)
+// UI Rendering - Vue Liste (Enhanced)
 // ===================================
+
+// Global state for list view
+let listSort = { field: 'dateLivraison', direction: 'asc' };
+let listSearch = '';
+
+/**
+ * Handle List Sort Click
+ */
+function handleListSort(field) {
+    if (listSort.field === field) {
+        listSort.direction = listSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        listSort.field = field;
+        listSort.direction = 'asc';
+    }
+    renderVueListe();
+}
+
+/**
+ * Handle List Search Input
+ */
+function handleListSearch(e) {
+    listSearch = e.target.value;
+    renderVueListe();
+}
 
 /**
  * Unplan all operations for a command
@@ -2808,89 +2833,217 @@ function unplanCommand(commandeId) {
 }
 
 /**
- * Render List View
+ * Render List View (Smart Update)
  */
 function renderVueListe() {
     const container = document.getElementById('planningContainer');
     
-    let html = `
-        <div class="vue-liste">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
-                <h2 style="margin:0;">Liste des Commandes</h2>
-                <div class="search-box">
-                    <!-- Placeholder for search -->
-                </div>
-            </div>
-            <div class="table-responsive">
-                <table class="commands-table">
-                    <thead>
-                        <tr>
-                            <th>Commande</th>
-                            <th>Client</th>
-                            <th>Livraison</th>
-                            <th>Matériau</th>
-                            <th>Statut Global</th>
-                            <th>État Planning</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-    `;
+    // --- 1. DATA PREPARATION ---
 
-    // Sort by delivery date
-    const sortedCommandes = [...commandes].sort((a, b) => new Date(a.dateLivraison) - new Date(b.dateLivraison));
-
-    sortedCommandes.forEach(cmd => {
-        const isPlaced = cmd.operations.some(op => op.slots.length > 0);
+    // Calculate Stats
+    let countTotal = 0;
+    let countComplete = 0;
+    let countPartial = 0;
+    let countNone = 0;
+    
+    commandes.forEach(cmd => {
+        countTotal++;
+        const totalOps = cmd.operations.length;
+        const placedOps = cmd.operations.filter(op => op.slots && op.slots.length > 0).length;
         
-        // Normalize status for CSS class
-        let statusClass = 'non-placee';
-        const s = cmd.statut.toLowerCase();
-        if (s.includes('planifi')) statusClass = 'planifiee';
-        else if (s.includes('cours')) statusClass = 'en-cours';
-        else if (s.includes('livr')) statusClass = 'livree';
-        else if (s.includes('termin')) statusClass = 'livree';
-        
-        // Planning status logic
-        let planningStatus = '<span class="planning-status not-in-planning">Non planifié</span>';
-        if (isPlaced) {
-            const placedOps = cmd.operations.filter(op => op.slots.length > 0).length;
-            const totalOps = cmd.operations.length;
-            if (placedOps === totalOps) {
-                planningStatus = '<span class="planning-status in-planning">✓ Planifié (Complet)</span>';
-            } else {
-                planningStatus = `<span class="planning-status in-planning" style="color:var(--color-poinconnage)">⚠ Partiel (${placedOps}/${totalOps})</span>`;
-            }
+        if (totalOps > 0) {
+            if (placedOps === totalOps) countComplete++;
+            else if (placedOps > 0) countPartial++;
+            else countNone++;
+        } else {
+            countNone++;
         }
-
-        html += `
-            <tr>
-                <td><strong>${cmd.id}</strong></td>
-                <td>${cmd.client}</td>
-                <td>${formatDate(cmd.dateLivraison)}</td>
-                <td>${cmd.poids}kg ${cmd.materiau}</td>
-                <td><span class="status-badge ${statusClass}">${cmd.statut}</span></td>
-                <td>${planningStatus}</td>
-                <td>
-                    <button class="btn btn-sm btn-secondary" onclick="showCommandeDetails('${cmd.id}')">Détails</button>
-                    ${isPlaced ? `<button class="btn btn-sm btn-danger" onclick="unplanCommand('${cmd.id}')" style="margin-left: 8px;">Retirer du planning</button>` : ''}
-                </td>
-            </tr>
-        `;
     });
 
-    html += `
-                    </tbody>
-                </table>
-            </div>
+    // Filter Logic
+    let filteredCommandes = [...commandes];
+    if (listSearch) {
+        const term = listSearch.toLowerCase();
+        filteredCommandes = filteredCommandes.filter(c => 
+            c.id.toLowerCase().includes(term) || 
+            c.client.toLowerCase().includes(term) ||
+            c.statut.toLowerCase().includes(term) ||
+            c.materiau.toLowerCase().includes(term)
+        );
+    }
+
+    // Sort Logic
+    filteredCommandes.sort((a, b) => {
+        let valA = a[listSort.field];
+        let valB = b[listSort.field];
+        
+        // Handle special fields
+        if (listSort.field === 'dateLivraison') {
+            valA = new Date(valA || '2099-12-31').getTime();
+            valB = new Date(valB || '2099-12-31').getTime();
+        } else if (listSort.field === 'progression') {
+             valA = a.operations.filter(op => op.slots.length > 0).length / Math.max(1, a.operations.length);
+             valB = b.operations.filter(op => op.slots.length > 0).length / Math.max(1, b.operations.length);
+        } else if (typeof valA === 'string') {
+            valA = valA.toLowerCase();
+            valB = valB.toLowerCase();
+        }
+        
+        if (valA < valB) return listSort.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return listSort.direction === 'asc' ? 1 : -1;
+        return 0;
+    });
+
+    // --- 2. HTML GENERATION HELPERS ---
+
+    const generateStatsHtml = () => `
+        <div class="stat-tag">Total: <span>${countTotal}</span></div>
+        <div class="stat-tag" style="border-color: var(--color-capacity-ok); color: #198754;">
+            <span style="background:var(--color-capacity-ok); width:8px; height:8px; border-radius:50%; display:inline-block;"></span>
+            Complètes: <span>${countComplete}</span>
+        </div>
+        <div class="stat-tag" style="border-color: var(--color-capacity-warning); color: #d63384;">
+            <span style="background:var(--color-capacity-warning); width:8px; height:8px; border-radius:50%; display:inline-block;"></span>
+            Partielles: <span>${countPartial}</span>
+        </div>
+        <div class="stat-tag" style="color: var(--color-text-secondary);">
+            Non placées: <span>${countNone}</span>
         </div>
     `;
 
-    container.innerHTML = html;
+    const generateRowsHtml = () => {
+        if (filteredCommandes.length === 0) {
+            return `<tr><td colspan="7" class="text-center" style="padding: 32px; color: var(--color-text-secondary);">Aucune commande trouvée</td></tr>`;
+        }
+
+        return filteredCommandes.map(cmd => {
+            const isPlaced = cmd.operations.some(op => op.slots.length > 0);
+            
+            // Status Class
+            let statusClass = 'non-placee';
+            const s = cmd.statut.toLowerCase();
+            if (s.includes('planifi')) statusClass = 'planifiee';
+            else if (s.includes('cours')) statusClass = 'en-cours';
+            else if (s.includes('livr')) statusClass = 'livree';
+            else if (s.includes('termin')) statusClass = 'livree';
+            
+            // Operations Visualization
+            let opsVizHtml = '<div class="ops-viz">';
+            const requiredOps = ['Cisaillage', 'Poinçonnage', 'Pliage'];
+            requiredOps.forEach(type => {
+                const op = cmd.operations.find(o => o.type === type);
+                if (op) {
+                    const isOpPlaced = op.slots && op.slots.length > 0;
+                    const typeClass = type.toLowerCase().replace('ç', 'c').replace('é', 'e');
+                    const label = type.substring(0, 2);
+                    opsVizHtml += `<div class="op-dot ${typeClass} ${isOpPlaced ? 'placed' : ''}" title="${type}: ${isOpPlaced ? 'Planifié' : 'À planifier'}">${label}</div>`;
+                } else {
+                     opsVizHtml += `<div class="op-dot" style="opacity:0.3" title="Non requis">-</div>`;
+                }
+            });
+            opsVizHtml += '</div>';
+
+            return `
+                <tr>
+                    <td><strong>${cmd.id}</strong></td>
+                    <td>${cmd.client}</td>
+                    <td>${formatDate(cmd.dateLivraison)}</td>
+                    <td>${cmd.poids}kg ${cmd.materiau}</td>
+                    <td><span class="status-badge ${statusClass}">${cmd.statut}</span></td>
+                    <td>${opsVizHtml}</td>
+                    <td>
+                        <button class="btn btn-sm btn-secondary" onclick="showCommandeDetails('${cmd.id}')">Détails</button>
+                        ${isPlaced ? `<button class="btn btn-sm btn-danger" onclick="unplanCommand('${cmd.id}')" style="margin-left: 8px;">Retirer</button>` : ''}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    };
+
+    // --- 3. DOM UPDATE ---
+    
+    const existingView = document.querySelector('.vue-liste');
+    const isUpdate = existingView && container.contains(existingView);
+
+    if (isUpdate) {
+        // A. Smart Update: Only update dynamic parts
+        
+        // 1. Update Stats
+        existingView.querySelector('.list-stats').innerHTML = generateStatsHtml();
+        
+        // 2. Update Table Body
+        existingView.querySelector('tbody').innerHTML = generateRowsHtml();
+        
+        // 3. Update Header Classes (Sort Icons)
+        const headers = existingView.querySelectorAll('.sort-header');
+        headers.forEach(th => {
+            th.classList.remove('asc', 'desc'); // Reset
+            // Simple mapping based on onclick attribute content or text
+            const onClickAttr = th.getAttribute('onclick');
+            if (onClickAttr && onClickAttr.includes(`'${listSort.field}'`)) {
+                th.classList.add(listSort.direction);
+            }
+        });
+
+    } else {
+        // B. Initial Render: Build full skeleton
+        const html = `
+            <div class="vue-liste">
+                <!-- Header Controls -->
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 16px; flex-wrap: wrap; gap: 16px;">
+                    <div>
+                        <h2 style="margin:0 0 8px 0;">Liste des Commandes</h2>
+                        <div class="list-stats">
+                            ${generateStatsHtml()}
+                        </div>
+                    </div>
+                    <div class="search-box">
+                        <input type="text" 
+                               class="search-input" 
+                               placeholder="Rechercher (Client, ID, Statut...)" 
+                               value="${listSearch}"
+                               oninput="handleListSearch(event)"> <!-- Focus is safe now -->
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="table-responsive">
+                    <table class="commands-table">
+                        <thead>
+                            <tr>
+                                <th class="sort-header ${listSort.field === 'id' ? listSort.direction : ''}" onclick="handleListSort('id')">Commande</th>
+                                <th class="sort-header ${listSort.field === 'client' ? listSort.direction : ''}" onclick="handleListSort('client')">Client</th>
+                                <th class="sort-header ${listSort.field === 'dateLivraison' ? listSort.direction : ''}" onclick="handleListSort('dateLivraison')">Livraison</th>
+                                <th class="sort-header ${listSort.field === 'materiau' ? listSort.direction : ''}" onclick="handleListSort('materiau')">Matériau</th>
+                                <th class="sort-header ${listSort.field === 'statut' ? listSort.direction : ''}" onclick="handleListSort('statut')">Statut Global</th>
+                                <th class="sort-header ${listSort.field === 'progression' ? listSort.direction : ''}" onclick="handleListSort('progression')">Progression Production</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${generateRowsHtml()}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+        container.innerHTML = html;
+        
+        // Restore focus if this was a full re-render triggered by search (edge case)
+        if (listSearch) {
+             const input = container.querySelector('.search-input');
+             if(input) {
+                 input.focus();
+                 input.setSelectionRange(input.value.length, input.value.length);
+             }
+        }
+    }
 }
 
-// Make globally accessible
+// Make functions globally accessible
 window.unplanCommand = unplanCommand;
+window.handleListSort = handleListSort;
+window.handleListSearch = handleListSearch;
 
 /**
  * Toggle between week and day views

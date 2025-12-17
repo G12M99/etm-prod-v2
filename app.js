@@ -3356,7 +3356,11 @@ function generateInsertionScenarios(order) {
     // Scénario C: Fractionnement (Split)
     // On autorise la découpe des opérations pour remplir les petits trous
     const planC = calculateSplitPlan(order);
-    if (planC.feasible && planC.isSplit) {
+    if (planC.feasible) {
+        const details = planC.isSplit 
+            ? `${planC.splitCount} coupures nécessaires` 
+            : 'Fractionnement non requis (rentre en 1 bloc)';
+            
         scenarios.push({
             id: 'C',
             name: 'Fractionnement',
@@ -3365,12 +3369,14 @@ function generateInsertionScenarios(order) {
             icon: '✂️',
             metrics: { 
                 feasibility: 'high', 
-                impact_score: 5, 
-                details: `${planC.splitCount} coupures nécessaires` 
+                impact_score: planC.isSplit ? 5 : 3, 
+                details: details
             },
             actions: { overbooking_slots: planC.slots },
             capacity_impact: { overbooking: false }
         });
+    } else {
+        scenarios.push({ id: 'C', name: 'Fractionnement', strategy: 'Impossible', badge: 'badge-C', icon: '⛔', metrics: { feasibility: 'none' }, disabled: true });
     }
     
     // Scénario D: Urgence Absolue (Overbooking/Heures Sup)

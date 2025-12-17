@@ -76,6 +76,13 @@
                 </svg>
                 <h2 class="sidebar-title">Commandes à placer</h2>
             </div>
+            
+            <!-- Bouton Urgence -->
+            <div style="padding: 0 var(--spacing-lg) var(--spacing-sm);">
+                <button class="btn btn-danger btn-urgent" id="btnInsertUrgent">
+                    ⚡ INSÉRER COMMANDE URGENTE
+                </button>
+            </div>
             <div class="sidebar-content" id="unplacedOrdersContainer">
                 <!-- Populated by JavaScript -->
             </div>
@@ -218,6 +225,53 @@
                         <button type="submit" class="btn btn-primary">Créer la commande</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Insertion Urgente -->
+    <div class="modal" id="modalUrgentInsertion">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 class="modal-title">⚡ Insertion Commande Urgente</h2>
+                <button class="btn-close" id="btnCloseUrgent">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Étape 1: Sélection Commande -->
+                <div id="stepSelectOrder" class="insertion-step active">
+                    <h3>Sélectionnez la commande urgente</h3>
+                    <p style="color:var(--color-text-secondary); margin-bottom:16px;">Seules les commandes non placées ou partiellement placées sont affichées.</p>
+                    <div id="urgentOrdersList" style="max-height: 400px; overflow-y: auto;"></div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnCancelUrgent">Annuler</button>
+                        <button class="btn btn-primary" id="btnNextToScenarios" disabled>Suivant →</button>
+                    </div>
+                </div>
+
+                <!-- Étape 2: Choix du Scénario -->
+                <div id="stepSelectScenario" class="insertion-step">
+                    <h3>Choisissez un scénario d'insertion</h3>
+                    <div id="scenariosList"></div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnBackToOrders">← Précédent</button>
+                        <button class="btn btn-primary" id="btnValidateScenario" disabled>Valider ✓</button>
+                    </div>
+                </div>
+
+                <!-- Étape 3: Confirmation Overbooking (si Scénario D) -->
+                <div id="stepConfirmOvertime" class="insertion-step">
+                    <h3>⚠️ Confirmation Heures Supplémentaires</h3>
+                    <div id="overtimeDetails" style="background:#fff3cd; padding:16px; border-radius:8px; margin-bottom:16px; border-left:4px solid #ffc107;"></div>
+                    <div class="checklist">
+                        <label><input type="checkbox" id="checkOperators"> Les opérateurs sont disponibles</label>
+                        <label><input type="checkbox" id="checkMaintenance"> Pas de maintenance prévue</label>
+                        <label><input type="checkbox" id="checkApproval"> Autorisation manager obtenue</label>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnBackToScenarios">← Retour</button>
+                        <button class="btn btn-primary" id="btnConfirmOvertime" disabled>Confirmer et Valider</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

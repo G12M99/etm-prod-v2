@@ -1860,6 +1860,455 @@ body {
     font-weight: bold;
 }
 
+/* ===================================
+   Overbooking & Urgent Styles
+   =================================== */
+
+/* Zone overbooking (100-105%) */
+.capacity-fill.capacity-overtime {
+    background: repeating-linear-gradient(
+        45deg,
+        #dc3545,
+        #dc3545 10px,
+        #ff6b6b 10px,
+        #ff6b6b 20px
+    );
+    animation: pulse-overtime 2s infinite;
+}
+
+ @keyframes pulse-overtime {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.8; }
+}
+
+.overtime-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: #dc3545;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: bold;
+    animation: blink 1.5s infinite;
+    z-index: 20;
+}
+
+ @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.operation-slot.overtime {
+    background: repeating-linear-gradient(
+        135deg,
+        var(--color-cisaillage),
+        var(--color-cisaillage) 10px,
+        rgba(220, 53, 69, 0.3) 10px,
+        rgba(220, 53, 69, 0.3) 20px
+    );
+    border: 2px solid #dc3545;
+    box-shadow: 0 0 10px rgba(220, 53, 69, 0.5);
+    z-index: 20 !important;
+}
+
+/* Override colors for specific overtime types if needed */
+.operation-slot.overtime.cisaillage {
+    background: repeating-linear-gradient(135deg, var(--color-cisaillage), var(--color-cisaillage) 10px, #a71d2a 10px, #a71d2a 20px);
+}
+.operation-slot.overtime.poinconnage {
+    background: repeating-linear-gradient(135deg, var(--color-poinconnage), var(--color-poinconnage) 10px, #a71d2a 10px, #a71d2a 20px);
+}
+.operation-slot.overtime.pliage {
+    background: repeating-linear-gradient(135deg, var(--color-pliage), var(--color-pliage) 10px, #a71d2a 10px, #a71d2a 20px);
+}
+
+.overtime-indicator {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    background: #dc3545;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    animation: pulse 1.5s infinite;
+    z-index: 25;
+}
+
+.overtime-indicator::before {
+    content: "🔥";
+}
+
+/* Séparateur heures normales/sup dans timeline */
+.overtime-separator {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 2px dashed #dc3545;
+    z-index: 5;
+    pointer-events: none;
+}
+
+.overtime-separator::after {
+    content: "HEURES SUP";
+    position: absolute;
+    right: 0;
+    top: -10px;
+    background: #dc3545;
+    color: white;
+    font-size: 9px;
+    padding: 0 4px;
+    border-radius: 2px;
+}
+
+/* Modal urgente */
+.modal-large {
+    max-width: 1000px;
+    height: 80vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-large .modal-body {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.insertion-step {
+    display: none;
+    height: 100%;
+}
+
+.insertion-step.active {
+    display: flex;
+    flex-direction: column;
+}
+
+.scenario-card {
+    border: 2px solid var(--color-border);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+    cursor: pointer;
+    transition: all 0.2s;
+    background: white;
+}
+
+.scenario-card:hover {
+    border-color: var(--color-primary);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+
+.scenario-card.selected {
+    border-color: var(--color-primary);
+    background-color: rgba(13, 110, 253, 0.05);
+    ring: 2px solid var(--color-primary);
+}
+
+.scenario-card.overtime {
+    border-color: #dc3545;
+}
+
+.scenario-card.overtime:hover {
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2);
+}
+
+.scenario-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.scenario-title {
+    font-weight: 700;
+    font-size: 1.1em;
+}
+
+.scenario-badge {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.8em;
+    font-weight: 600;
+}
+
+.badge-A { background: #d1e7dd; color: #0f5132; }
+.badge-B { background: #cff4fc; color: #055160; }
+.badge-C { background: #fff3cd; color: #664d03; }
+.badge-D { background: #f8d7da; color: #842029; }
+
+.impact-stars {
+    color: #ffc107;
+}
+
+.btn-urgent {
+    width: 100%;
+    margin-top: var(--spacing-md);
+    background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+    border: none;
+    animation: pulse-urgent 2s infinite;
+    color: white;
+    font-weight: bold;
+    box-shadow: 0 4px 6px rgba(220, 53, 69, 0.3);
+}
+
+.btn-urgent:hover {
+    background: linear-gradient(135deg, #bd2130 0%, #a71d2a 100%);
+    transform: translateY(-2px);
+}
+
+ @keyframes pulse-urgent {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.02); }
+}
+
+.checklist {
+    margin: var(--spacing-lg) 0;
+    background: #f8f9fa;
+    padding: var(--spacing-md);
+    border-radius: var(--border-radius);
+    border: 1px solid var(--color-border);
+}
+
+.checklist label {
+    display: flex;
+    align-items: center;
+    padding: var(--spacing-sm);
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+}
+
+.checklist label:last-child {
+    border-bottom: none;
+}
+
+.checklist input[type="checkbox"] {
+    margin-right: var(--spacing-md);
+    width: 18px;
+    height: 18px;
+}
+
+/* Urgent Orders List in Modal */
+.urgent-order-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.urgent-order-item:hover {
+    background-color: #f8f9fa;
+    border-color: var(--color-primary);
+}
+
+.urgent-order-item.selected {
+    background-color: rgba(13, 110, 253, 0.1);
+    border-color: var(--color-primary);
+}
+
+.modal-actions {
+    margin-top: auto;
+    padding-top: var(--spacing-lg);
+    border-top: 1px solid var(--color-border);
+    display: flex;
+
+
+/* ===================================
+   Sync Controls & Dropdown
+   =================================== */
+
+.sync-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.sync-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: #f8f9fa;
+    border-radius: var(--border-radius-sm);
+    font-size: 13px;
+    border: 1px solid var(--color-border);
+    transition: all 0.3s ease;
+}
+
+.sync-indicator span:first-child {
+    font-weight: bold;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.sync-indicator.sync-synced {
+    background: #d4edda;
+    border-color: #28a745;
+    color: #155724;
+}
+
+.sync-indicator.sync-syncing {
+    background: #d1ecf1;
+    border-color: #0d6efd;
+    color: #004085;
+}
+
+.sync-indicator.sync-syncing span:first-child {
+    animation: rotate 1s linear infinite;
+}
+
+.sync-indicator.sync-offline {
+    background: #fff3cd;
+    border-color: #ffc107;
+    color: #856404;
+}
+
+.sync-indicator.sync-error {
+    background: #f8d7da;
+    border-color: #dc3545;
+    color: #721c24;
+}
+
+ @keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Dropdown Menu */
+.dropdown {
+    position: relative;
+}
+
+.dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: white;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-lg);
+    min-width: 220px;
+    padding: var(--spacing-xs);
+    display: none;
+    z-index: 1000;
+}
+
+.dropdown.active .dropdown-menu {
+    display: block;
+    animation: slideDown 0.2s ease;
+}
+
+ @keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.dropdown-menu button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    text-align: left;
+    padding: var(--spacing-sm);
+    border: none;
+    background: none;
+    cursor: pointer;
+    border-radius: var(--border-radius-sm);
+    font-size: var(--font-size-sm);
+    color: var(--color-text);
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.dropdown-menu button:hover {
+    background: var(--color-background);
+}
+
+.dropdown-menu button svg {
+    flex-shrink: 0;
+}
+
+/* Toast Notifications */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: white;
+    padding: var(--spacing-md);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    min-width: 300px;
+    z-index: 10000;
+    animation: slideInRight 0.3s ease;
+}
+
+ @keyframes slideInRight {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.toast.fade-out {
+    animation: slideOutRight 0.3s ease;
+}
+
+ @keyframes slideOutRight {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+}
+
+.toast.toast-success {
+    border-left: 4px solid #28a745;
+}
+
+.toast.toast-error {
+    border-left: 4px solid #dc3545;
+}
+
+.toast.toast-warning {
+    border-left: 4px solid #ffc107;
+}
+
+.toast.toast-info {
+    border-left: 4px solid #0d6efd;
+}
+
+.toast-icon {
+    font-size: 20px;
+    font-weight: bold;
+}
+
 .toast-message {
     flex: 1;
 }

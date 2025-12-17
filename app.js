@@ -26,6 +26,73 @@ const HOURS_PER_DAY = {
 const DAYS_OF_WEEK = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
 const TOTAL_HOURS_PER_WEEK = 39; // 8.5*4 + 5
 
+// --- NEW CONFIGURATION V2.1 (Urgent/Overbooking) ---
+
+const CAPACITY_CONFIG = {
+    normal: {
+        weeklyHours: 39,
+        dailyHours: HOURS_PER_DAY,
+        threshold: {
+            ok: 75,
+            warning: 95,
+            danger: 100
+        }
+    },
+    overbooking: {
+        enabled: true,
+        maxPercentage: 105,
+        requiresApproval: true,
+        visualIndicator: 'critical',
+        conditions: {
+            minDaysAdvance: 0,
+            maxConsecutiveDays: 2,
+            weekendWork: false
+        }
+    },
+    overtime: {
+        availableSlots: [
+            { days: ['Lundi', 'Mardi', 'Mercredi', 'Jeudi'], range: '16:30-18:00', maxHours: 1.5 },
+            { days: ['Vendredi'], range: '12:00-14:00', maxHours: 2 }
+        ],
+        maxWeeklyHours: 10,
+        maxDailyHours: 2
+    }
+};
+
+const FREEZE_CONFIG = {
+    currentDay: true,
+    nextDay: 'partial',
+    freezeHorizon: 24,
+    overridePassword: false,
+    overrideWarning: "⚠️ ATTENTION : Modification de la journée en cours.\nCela peut perturber la production actuelle.\n\nContinuer quand même ?"
+};
+
+const RESCHEDULE_WINDOW = {
+    maxDays: 3,
+    maxMachines: 'same-type',
+    respectChronology: true
+};
+
+const overtimeTracker = {
+    currentWeek: 50,
+    totalHoursUsed: 0,
+    byMachine: {},
+    byDay: {},
+    history: [],
+    limits: {
+        weeklyMax: 10,
+        dailyMax: 2
+    }
+};
+
+// Initialize overtime trackers
+ALL_MACHINES.forEach(machine => {
+    overtimeTracker.byMachine[machine] = { hours: 0 };
+});
+DAYS_OF_WEEK.forEach(day => {
+    overtimeTracker.byDay[day] = 0;
+});
+
 // Lunch break configuration (Monday-Thursday only)
 const LUNCH_BREAK = {
     start: '12:30',
@@ -895,7 +962,23 @@ function calculerCapaciteJour(machine, jour, semaine) {
     const heuresUtilisees = slots.reduce((sum, slot) => sum + slot.duree, 0);
     const pourcentage = Math.round((heuresUtilisees / capaciteJour) * 100);
 
-    return { heuresUtilisees, capaciteJour, pourcentage };
+    // Déterminer classe de capacité
+    let capacityClass = 'capacity-ok';
+    if (heuresUtilisees > capaciteJour) {
+        capacityClass = 'capacity-overtime';
+    } else if (pourcentage >= 96) {
+        capacityClass = 'capacity-danger';
+    } else if (pourcentage >= 76) {
+        capacityClass = 'capacity-warning';
+    }
+
+    return { 
+        heuresUtilisees, 
+        capaciteJour, 
+        pourcentage, 
+        capacityClass,
+        isOvertime: heuresUtilisees > capaciteJour 
+    };
 }
 
 /**
@@ -1600,8 +1683,10 @@ function renderVueJournee() {
         // Day cells with hourly time slots
         DAYS_OF_WEEK.forEach(day => {
             const capacityInfo = calculerCapaciteJour(machine, day, semaineSelectionnee);
-            const capacityClass = getCapacityColorClass(capacityInfo.pourcentage);
-            const isOverCapacity = capacityInfo.heuresUtilisees > capacityInfo.capaciteJour;
+            // Use the new capacityClass from the updated function
+            const capacityClass = capacityInfo.capacityClass; 
+            const isOverCapacity = capacityInfo.isOvertime;
+            
             // Timeline hours: Fri 07:00-12:00, Mon-Thu 07:30-16:30
             const startHourTimeline = day === 'Vendredi' ? 7 : 7.5;
             const endHourTimeline = day === 'Vendredi' ? 12 : 16.5;
@@ -1617,14 +1702,16 @@ function renderVueJournee() {
                         <div class="stat-row">
                             <span>Charge: ${Math.round(capacityInfo.pourcentage)}%</span>
                             <span class="${isOverCapacity ? 'text-danger' : ''}">
-                                ${Math.round(capacityInfo.heuresUtilisees)}h / ${capacityInfo.capaciteJour}h
-                                ${isOverCapacity ? '⚠️' : ''}
+                                ${Math.round(capacityInfo.heuresUtilisees * 10) / 10}h / ${capacityInfo.capaciteJour}h
+                                ${isOverCapacity ? '🔥' : ''}
                             </span>
                         </div>
                         <div class="stat-progress">
                             <div class="stat-progress-bar ${capacityClass}" style="width: ${Math.min(100, Math.round(capacityInfo.pourcentage))}%"></div>
                         </div>
                     </div>
+
+                    ${isOverCapacity ? '<div class="overtime-badge">HEURES SUP</div>' : ''}
 
                     <div class="day-timeline">
             `;
@@ -1643,7 +1730,8 @@ function renderVueJournee() {
                                 client: cmd.client,
                                 operationType: op.type,
                                 commandeRef: cmd,
-                                operationRef: op
+                                operationRef: op,
+                                overtime: slot.overtime || false // Ensure property exists
                             });
                         }
                     });
@@ -1658,14 +1746,12 @@ function renderVueJournee() {
 
             // Create hourly time grid (background)
             html += '<div class="time-grid">';
+            
             // Generate time slots based on day
-            // Each slot = 1 hour = 60px
-            // For Mon-Thu: start at 07:30, show hourly marks at 07:30, 08:30, 09:30... 16:30
-            // For Friday: start at 07:00, show hourly marks at 07:00, 08:00, 09:00... 12:00
-
             if (day === 'Vendredi') {
-                // Friday: 07:00-12:00 (5 slots of 1 hour each)
-                for (let hour = 7; hour < 12; hour++) {
+                // Friday: 07:00-12:00 + Overtime up to 14:00
+                // Render up to 14:00 to show overtime slots if any
+                for (let hour = 7; hour < 14; hour++) {
                     const timeSlot = `${hour.toString().padStart(2, '0')}:00`;
                     html += `
                         <div class="time-slot drop-zone"
@@ -1679,10 +1765,10 @@ function renderVueJournee() {
                     `;
                 }
             } else {
-                // Mon-Thu: 07:30-16:30 (9 slots of 1 hour each)
-                // Show: 07:30, 08:30, 09:30, 10:30, 11:30, 12:30, 13:30, 14:30, 15:30
-                for (let i = 0; i < 9; i++) {
-                    const hourDecimal = 7.5 + i; // 7.5, 8.5, 9.5... 15.5
+                // Mon-Thu: 07:30-16:30 + Overtime up to 18:00
+                // Render up to 18:00
+                for (let i = 0; i < 11; i++) { // 7.5 to 17.5 (18:00 end)
+                    const hourDecimal = 7.5 + i; 
                     const hour = Math.floor(hourDecimal);
                     const minute = (hourDecimal % 1 === 0.5) ? '30' : '00';
                     const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
@@ -1703,23 +1789,20 @@ function renderVueJournee() {
             // Overlay operations with absolute positioning
             html += '<div class="operations-overlay">';
 
-            // Add lunch break visual for Mon-Thu (12:30-13:00)
+            // 1. Add lunch break visual
             if (day !== 'Vendredi') {
-                // Pause: 12:30-13:00
-                const lunchStartDecimal = 12.5; // 12:30 in decimal
-                const lunchEndDecimal = 13.0;   // 13:00 in decimal
-
-                // Calculate position from timeline start (07:30 = 7.5)
-                // 12:30 is 5 hours after 07:30
+                const lunchStartDecimal = 12.5; 
+                const lunchEndDecimal = 13.0;   
                 const topLunch = (lunchStartDecimal - startHourTimeline) * 60;
                 const heightLunch = (lunchEndDecimal - lunchStartDecimal) * 60;
-
-                console.log(`🍽️ Pause déjeuner: ${day} | start=${lunchStartDecimal}h | timeline=${startHourTimeline}h | top=${topLunch}px | height=${heightLunch}px`);
-
-                html += `
-                    <div class="lunch-break" style="top: ${topLunch}px; height: ${heightLunch}px;"></div>
-                `;
+                html += `<div class="lunch-break" style="top: ${topLunch}px; height: ${heightLunch}px;"></div>`;
             }
+
+            // 2. Add Overtime Separator
+            // Mon-Thu: 16:30 (16.5), Fri: 12:00 (12.0)
+            const separatorTime = day === 'Vendredi' ? 12 : 16.5;
+            const separatorTop = (separatorTime - startHourTimeline) * 60;
+            html += `<div class="overtime-separator" style="top: ${separatorTop}px;"></div>`;
 
             // 🔴 Add Current Time Line (Red Line)
             // Check if this column represents "Today"
@@ -1730,65 +1813,50 @@ function renderVueJournee() {
             const currentDayName = dayMap[today.getDay()];
 
             if (semaineSelectionnee === currentWeekNum && day === currentDayName) {
-                // It's today! Calculate position.
                 const nowHour = today.getHours();
                 const nowMin = today.getMinutes();
                 const nowDecimal = nowHour + (nowMin / 60);
-
-                // Only show if within working hours view
-                if (nowDecimal >= startHourTimeline && nowDecimal <= endHourTimeline) {
+                // Extended range for overtime view
+                if (nowDecimal >= startHourTimeline && nowDecimal <= (endHourTimeline + 2)) {
                     const topPos = (nowDecimal - startHourTimeline) * 60;
                     html += `<div class="current-time-line" style="top: ${topPos}px;" title="Il est ${nowHour}h${nowMin}"></div>`;
                 }
             }
 
             slots.forEach(slot => {
-                // Convert HH:MM to decimal hours for precise positioning
-                // Example: "09:09" => 9 + 9/60 = 9.15
                 const startHour = parseInt(slot.heureDebut.split(':')[0]);
                 const startMinute = parseInt(slot.heureDebut.split(':')[1]);
                 const startDecimal = startHour + (startMinute / 60);
 
-                // Calculate end time decimal
                 const endHourParts = slot.heureFin.split(':');
                 const endDecimal = parseInt(endHourParts[0]) + parseInt(endHourParts[1]) / 60;
 
-                // Check if crossing lunch (Mon-Thu only, lunch 12:30-13:00)
                 const lunchStart = 12.5;
                 const lunchEnd = 13.0;
                 const crossesLunch = day !== 'Vendredi' && startDecimal < lunchStart && endDecimal > lunchEnd;
 
                 const renderSlotDiv = (sTime, eTime, isSplitPart = false) => {
-                    // Position relative to timeline start
-                    // startHourTimeline is 7.5 for Mon-Thu (07:30) or 7.0 for Fri (07:00)
-                    // Example: if sTime=9.15 (09:09) and startHourTimeline=7.5 (07:30)
-                    //   startOffsetHours = 9.15 - 7.5 = 1.65 hours after start
-                    //   topPosition = 1.65 * 60px/hour = 99px from top
                     const startOffsetHours = sTime - startHourTimeline;
-                    const topPosition = Math.round(startOffsetHours * 60);  // 60px per hour, rounded to nearest pixel
+                    const topPosition = Math.round(startOffsetHours * 60);
                     const heightInPixels = Math.round((eTime - sTime) * 60);
 
-                    // Debug log for position verification
-                    if (slot.heureDebut === slot.heureDebut) { // Always true, just for grouping
-                        console.log(`📍 Position: ${slot.operationType} ${slot.heureDebut}-${slot.heureFin} | ` +
-                                    `sTime=${sTime.toFixed(2)}h | startTimeline=${startHourTimeline}h | ` +
-                                    `offset=${startOffsetHours.toFixed(2)}h | top=${topPosition}px`);
-                    }
-                    
-                    // Specific class for split parts to look connected?
-                    // Maybe just same styling.
-                    
                     const typeClass = slot.operationType.toLowerCase().replace('ç', 'c').replace('é', 'e');
-                    const slotId = `${slot.semaine}_${slot.jour}_${slot.heureDebut}`; // Original ID
+                    const slotId = `${slot.semaine}_${slot.jour}_${slot.heureDebut}`; 
+                    
+                    // Add overtime class if flag is true
+                    const extraClass = slot.overtime ? 'overtime' : '';
 
                     return `
-                        <div class="operation-slot ${typeClass} draggable"
+                        <div class="operation-slot ${typeClass} ${extraClass} draggable"
                              draggable="true"
                              data-commande-id="${slot.commandeId}"
                              data-operation-type="${slot.operationType}"
                              data-slot-id="${slotId}"
                              data-operation='${JSON.stringify({ commandeId: slot.commandeId, operationType: slot.operationType, slotId: slotId }).replace(/'/g, "&#39;")}'
-                             style="position: absolute; top: ${topPosition}px; left: 5px; right: 5px; height: ${heightInPixels}px; z-index: 10;">
+                             style="position: absolute; top: ${topPosition}px; left: 5px; right: 5px; height: ${heightInPixels}px; z-index: ${slot.overtime ? 20 : 10};">
+                            
+                            ${slot.overtime ? '<div class="overtime-indicator"></div>' : ''}
+                            
                             <div class="slot-time">${slot.heureDebut}-${slot.heureFin}</div>
                             <div class="slot-label">[${slot.commandeId.substring(5)}]</div>
                             <div class="slot-client">${slot.client}</div>
@@ -3149,6 +3217,875 @@ function initEventHandlers() {
                 modal.classList.remove('active');
             });
         }
+    });
+}
+
+// ===================================
+// ⚡ URGENT INSERTION & OVERBOOKING LOGIC
+// ===================================
+
+let currentUrgentOrder = null;
+let currentScenarios = [];
+let currentScenario = null;
+
+/**
+ * Show Urgent Insertion Modal
+ */
+function showUrgentInsertionModal() {
+    document.getElementById('modalUrgentInsertion').classList.add('active');
+    
+    // Reset steps
+    document.querySelectorAll('.insertion-step').forEach(step => step.classList.remove('active'));
+    document.getElementById('stepSelectOrder').classList.add('active');
+    
+    renderUrgentOrdersList();
+}
+
+/**
+ * Render list of urgent orders (Unplaced or Partial)
+ */
+function renderUrgentOrdersList() {
+    const container = document.getElementById('urgentOrdersList');
+    const unplaced = getUnplacedOrders();
+    
+    // Filter out delivered/completed
+    const candidates = unplaced.filter(cmd => 
+        !cmd.statut.toLowerCase().includes('livré') && 
+        !cmd.statut.toLowerCase().includes('terminé')
+    );
+    
+    // Sort by urgency (delivery date)
+    candidates.sort((a, b) => new Date(a.dateLivraison) - new Date(b.dateLivraison));
+    
+    if (candidates.length === 0) {
+        container.innerHTML = '<p class="text-center" style="padding:20px;">Aucune commande éligible à l\'insertion urgente.</p>';
+        return;
+    }
+    
+    let html = '';
+    candidates.forEach(cmd => {
+        const urgency = getUrgencyLevel(cmd.dateLivraison);
+        const color = urgency === 'urgente' ? '#dc3545' : (urgency === 'attention' ? '#ffc107' : '#28a745');
+        
+        html += `
+            <div class="urgent-order-item" onclick="selectUrgentOrder('${cmd.id}')" id="order-${cmd.id}">
+                <div>
+                    <div style="font-weight:bold;">${cmd.id} - ${cmd.client}</div>
+                    <div style="font-size:0.9em; color:#666;">${cmd.poids}kg ${cmd.materiau}</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="color:${color}; font-weight:bold;">${formatDate(cmd.dateLivraison)}</div>
+                    <div style="font-size:0.8em;">${cmd.statut}</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+}
+
+/**
+ * Handle Order Selection
+ */
+function selectUrgentOrder(orderId) {
+    document.querySelectorAll('.urgent-order-item').forEach(el => el.classList.remove('selected'));
+    document.getElementById(`order-${orderId}`).classList.add('selected');
+    
+    currentUrgentOrder = commandes.find(c => c.id === orderId);
+    document.getElementById('btnNextToScenarios').disabled = false;
+}
+
+/**
+ * Go to Scenario Selection Step
+ */
+function handleNextToScenarios() {
+    if (!currentUrgentOrder) return;
+    
+    document.getElementById('stepSelectOrder').classList.remove('active');
+    document.getElementById('stepSelectScenario').classList.add('active');
+    
+    // Generate Scenarios
+    currentScenarios = generateInsertionScenarios(currentUrgentOrder);
+    renderScenariosSelection();
+}
+
+/**
+ * Generate 4 Insertion Scenarios
+ */
+function generateInsertionScenarios(order) {
+    const scenarios = [];
+    
+    // Scénario A: Impact Minimal (Standard Logic - Late but safe)
+    // On cherche le premier créneau qui ne perturbe RIEN (fin de file)
+    const planA = calculateNormalPlan(order);
+    scenarios.push({
+        id: 'A',
+        name: 'Impact Minimal',
+        strategy: 'À la suite des autres commandes',
+        badge: 'badge-A',
+        icon: '🌱',
+        metrics: {
+            feasibility: 'high',
+            impact_score: 1,
+            details: 'Aucune perturbation'
+        },
+        actions: { plan: planA },
+        capacity_impact: { overbooking: false }
+    });
+    
+    // Scénario B: Démarrage Plus Tôt (Aggressive Fit)
+    // On cherche les "trous" dans le planning existant (avant la fin de file)
+    const planB = calculateEarliestStartPlan(order);
+    if (planB.feasible) {
+        scenarios.push({
+            id: 'B',
+            name: 'Insertion dans les trous',
+            strategy: 'Optimisation des temps morts',
+            badge: 'badge-B',
+            icon: '🧩',
+            metrics: { 
+                feasibility: 'medium', 
+                impact_score: 3, 
+                details: 'Utilise les disponibilités existantes' 
+            },
+            actions: { overbooking_slots: planB.slots }, // We reuse slots structure
+            capacity_impact: { overbooking: false }
+        });
+    }
+
+    // Scénario C: Fractionnement (Split)
+    // On autorise la découpe des opérations pour remplir les petits trous
+    const planC = calculateSplitPlan(order);
+    if (planC.feasible && planC.isSplit) {
+        scenarios.push({
+            id: 'C',
+            name: 'Fractionnement',
+            strategy: 'Découpage des opérations',
+            badge: 'badge-C',
+            icon: '✂️',
+            metrics: { 
+                feasibility: 'high', 
+                impact_score: 5, 
+                details: `${planC.splitCount} coupures nécessaires` 
+            },
+            actions: { overbooking_slots: planC.slots },
+            capacity_impact: { overbooking: false }
+        });
+    }
+    
+    // Scénario D: Urgence Absolue (Overbooking/Heures Sup)
+    const planD = calculateOverbookingPlan(order);
+    if (planD.feasible) {
+        scenarios.push({
+            id: 'D',
+            name: 'Urgence Prioritaire',
+            strategy: 'Forçage (Heures Sup + Priorité)',
+            badge: 'badge-D',
+            icon: '🔥',
+            metrics: {
+                feasibility: 'medium',
+                impact_score: 9,
+                overtime_hours: planD.totalOvertimeHours,
+                details: `${planD.totalOvertimeHours}h prioritaires`
+            },
+            actions: { overbooking_slots: planD.slots },
+            capacity_impact: { overbooking: true, overtime_needed: true },
+            warnings: ['Validation manager requise', 'Coût opérationnel élevé']
+        });
+    }
+    
+    return scenarios;
+}
+
+// --- CALCULATION FUNCTIONS ---
+
+function calculateNormalPlan(order) {
+    return true; // Stub
+}
+
+function getMachinesForOp(type) {
+    if (type === 'Cisaillage') return MACHINES.cisailles;
+    if (type === 'Poinçonnage') return MACHINES.poinconneuses;
+    if (type === 'Pliage') return MACHINES.plieuses;
+    return [];
+}
+
+/**
+ * Scénario B: Earliest Start (Trous Standard)
+ */
+function calculateEarliestStartPlan(order) {
+    const result = { feasible: true, slots: [] };
+    const now = new Date();
+    let currentSimulatedTime = { week: semaineSelectionnee, dayIdx: 0, minHour: 0 };
+    
+    if (getWeekNumber(now) === semaineSelectionnee) {
+        let todayIdx = now.getDay() - 1;
+        if (todayIdx === -1) todayIdx = 6;
+        currentSimulatedTime.dayIdx = todayIdx;
+        currentSimulatedTime.minHour = now.getHours() + now.getMinutes() / 60;
+    }
+
+    const sortedOperations = [...order.operations].sort((a, b) => {
+        const orderMap = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
+        return (orderMap[a.type] || 99) - (orderMap[b.type] || 99);
+    });
+
+    for (const op of sortedOperations) {
+        if (op.slots.length > 0) continue;
+        
+        let placed = false;
+        let startDayIdx = currentSimulatedTime.dayIdx;
+        
+        for (let d = startDayIdx; d < 5; d++) {
+            const dayName = DAYS_OF_WEEK[d];
+            const minStart = (d === currentSimulatedTime.dayIdx) ? currentSimulatedTime.minHour : 0;
+            
+            let machines = getMachinesForOp(op.type);
+            for (const machine of machines) {
+                // Cherche gap standard (pas heures sup)
+                const slot = findUrgentSlot(machine, dayName, op.dureeTotal, minStart);
+                // Vérifier si slot est dans heures standard (fin < 16.5 ou 12.0)
+                const dayEndStandard = dayName === 'Vendredi' ? 12.0 : 16.5;
+                
+                if (slot && slot.endDecimal <= dayEndStandard) {
+                    result.slots.push({
+                        machine: machine, day: dayName, hours: op.dureeTotal, 
+                        timeRange: slot.range, opType: op.type
+                    });
+                    currentSimulatedTime.dayIdx = d;
+                    currentSimulatedTime.minHour = slot.endDecimal;
+                    placed = true;
+                    break;
+                }
+            }
+            if (placed) break;
+        }
+        if (!placed) { result.feasible = false; break; }
+    }
+    return result;
+}
+
+/**
+ * Scénario C: Split
+ */
+function calculateSplitPlan(order) {
+    const result = { feasible: true, slots: [], isSplit: false, splitCount: 0 };
+    const now = new Date();
+    let currentSimulatedTime = { week: semaineSelectionnee, dayIdx: 0, minHour: 0 };
+    
+    if (getWeekNumber(now) === semaineSelectionnee) {
+        let todayIdx = now.getDay() - 1;
+        if (todayIdx === -1) todayIdx = 6;
+        currentSimulatedTime.dayIdx = todayIdx;
+        currentSimulatedTime.minHour = now.getHours() + now.getMinutes() / 60;
+    }
+
+    const sortedOperations = [...order.operations].sort((a, b) => {
+        const orderMap = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
+        return (orderMap[a.type] || 99) - (orderMap[b.type] || 99);
+    });
+
+    for (const op of sortedOperations) {
+        if (op.slots.length > 0) continue;
+        
+        let remainingDuration = op.dureeTotal;
+        let startDayIdx = currentSimulatedTime.dayIdx;
+        let opSplits = 0;
+        
+        for (let d = startDayIdx; d < 5 && remainingDuration > 0.01; d++) {
+            const dayName = DAYS_OF_WEEK[d];
+            const minStart = (d === currentSimulatedTime.dayIdx) ? currentSimulatedTime.minHour : 0;
+            
+            let machines = getMachinesForOp(op.type);
+            for (const machine of machines) {
+                // Chercher petit trou
+                const slot = findUrgentSlot(machine, dayName, Math.min(remainingDuration, 0.5), minStart); // Min 30m check
+                
+                if (slot) {
+                    result.slots.push({
+                        machine: machine, day: dayName, hours: Math.min(remainingDuration, 0.5),
+                        timeRange: slot.range, opType: op.type
+                    });
+                    remainingDuration -= 0.5;
+                    currentSimulatedTime.dayIdx = d;
+                    currentSimulatedTime.minHour = slot.endDecimal;
+                    opSplits++;
+                    if (remainingDuration <= 0.01) break;
+                }
+            }
+        }
+        
+        if (opSplits > 1) {
+            result.isSplit = true;
+            result.splitCount += (opSplits - 1);
+        }
+        
+        if (remainingDuration > 0.01) { result.feasible = false; break; }
+    }
+    return result;
+}
+
+/**
+ * Scénario B: Cherche le premier trou disponible (sans fractionnement)
+ */
+function calculateEarliestStartPlan(order) {
+    const result = { feasible: true, slots: [] };
+    let currentTime = { week: semaineSelectionnee, dayIdx: 0, minHour: 0 };
+    
+    // Ajuster au temps réel
+    const now = new Date();
+    if (getWeekNumber(now) === semaineSelectionnee) {
+        let todayIdx = now.getDay() - 1;
+        if (todayIdx === -1) todayIdx = 6;
+        currentTime.dayIdx = todayIdx;
+        currentTime.minHour = now.getHours() + now.getMinutes() / 60;
+    }
+
+    for (const op of order.operations) {
+        let placed = false;
+        let startDayIdx = currentTime.dayIdx;
+        
+        // Chercher sur les 5 prochains jours
+        for (let d = startDayIdx; d < startDayIdx + 5; d++) {
+            const dayIdx = d % 5; // Wrap week if needed, simplified here to current week
+            const dayName = DAYS_OF_WEEK[dayIdx];
+            const minStart = (dayIdx === currentTime.dayIdx) ? currentTime.minHour : 7.5; // 7.5 = start day
+
+            // Chercher machine
+            let machines = getMachinesForOp(op.type);
+            for (const machine of machines) {
+                // On cherche un trou STANDARD (pas heures sup, pas étendu)
+                // Donc on utilise findFirstAvailableGap mais avec contrainte minStart
+                const gap = findStandardGap(machine, dayName, semaineSelectionnee, op.dureeTotal, minStart);
+                if (gap) {
+                    result.slots.push({
+                        machine: machine,
+                        day: dayName,
+                        hours: op.dureeTotal,
+                        timeRange: formatTimeRange(gap.start, gap.end),
+                        opType: op.type
+                    });
+                    currentTime.dayIdx = dayIdx;
+                    currentTime.minHour = gap.end;
+                    placed = true;
+                    break;
+                }
+            }
+            if (placed) break;
+        }
+        if (!placed) { result.feasible = false; break; }
+    }
+    return result;
+}
+
+/**
+ * Scénario C: Fractionnement
+ */
+function calculateSplitPlan(order) {
+    const result = { feasible: true, slots: [], isSplit: false, splitCount: 0 };
+    let currentTime = { week: semaineSelectionnee, dayIdx: 0, minHour: 0 };
+    
+    // Ajuster temps réel
+    const now = new Date();
+    if (getWeekNumber(now) === semaineSelectionnee) {
+        let todayIdx = now.getDay() - 1;
+        if (todayIdx === -1) todayIdx = 6;
+        currentTime.dayIdx = todayIdx;
+        currentTime.minHour = now.getHours() + now.getMinutes() / 60;
+    }
+
+    for (const op of order.operations) {
+        let remainingDuration = op.dureeTotal;
+        let startDayIdx = currentTime.dayIdx;
+        let opSplits = 0;
+
+        // On essaye de caser des morceaux
+        for (let d = startDayIdx; d < startDayIdx + 5 && remainingDuration > 0.1; d++) {
+            const dayIdx = d % 5;
+            const dayName = DAYS_OF_WEEK[dayIdx];
+            const minStart = (dayIdx === currentTime.dayIdx) ? currentTime.minHour : 7.5;
+
+            let machines = getMachinesForOp(op.type);
+            for (const machine of machines) {
+                // Trouver TOUS les trous disponibles sur cette machine ce jour là
+                const gaps = findAllGaps(machine, dayName, semaineSelectionnee, minStart);
+                
+                for (const gap of gaps) {
+                    const usable = Math.min(gap.duration, remainingDuration);
+                    if (usable >= 0.5) { // Minimum 30 min pour un morceau
+                        result.slots.push({
+                            machine: machine,
+                            day: dayName,
+                            hours: usable,
+                            timeRange: formatTimeRange(gap.start, gap.start + usable),
+                            opType: op.type
+                        });
+                        remainingDuration -= usable;
+                        currentTime.dayIdx = dayIdx;
+                        currentTime.minHour = gap.start + usable;
+                        opSplits++;
+                        if (remainingDuration <= 0.1) break;
+                    }
+                }
+                if (remainingDuration <= 0.1) break;
+            }
+        }
+        
+        if (opSplits > 1) {
+            result.isSplit = true;
+            result.splitCount += (opSplits - 1);
+        }
+
+        if (remainingDuration > 0.1) { result.feasible = false; break; }
+    }
+    return result;
+}
+
+// --- Helpers ---
+
+function getMachinesForOp(type) {
+    if (type === 'Cisaillage') return MACHINES.cisailles;
+    if (type === 'Poinçonnage') return MACHINES.poinconneuses;
+    if (type === 'Pliage') return MACHINES.plieuses;
+    return [];
+}
+
+function findStandardGap(machine, day, week, duration, minStart) {
+    // 1. Get busy slots
+    const dayStart = 7.5; 
+    const dayEnd = day === 'Vendredi' ? 12.0 : 16.5;
+    if (minStart >= dayEnd) return null;
+
+    const startSearch = Math.max(dayStart, minStart);
+    
+    // Get occupied slots logic (same as findUrgentSlot but restricted to standard hours)
+    // ... (Simplified: assume we use existing findFirstAvailableGap logic but constrained)
+    
+    // For this prototype, we reuse findUrgentSlot BUT we cap the dayEnd strictly
+    // to simulate "Standard hours only"
+    const slot = findUrgentSlot(machine, day, duration, startSearch);
+    
+    if (slot && slot.endDecimal <= dayEnd) {
+        return { start: slot.endDecimal - duration, end: slot.endDecimal };
+    }
+    return null;
+}
+
+function findAllGaps(machine, day, week, minStart) {
+    // Return array of {start, end, duration}
+    // Simplified: check big chunks
+    const gaps = [];
+    const dayEnd = day === 'Vendredi' ? 12.0 : 16.5;
+    let current = Math.max(7.5, minStart);
+    
+    // Check iteratively
+    while (current < dayEnd) {
+        // Try to find a gap of at least 0.5h
+        const slot = findUrgentSlot(machine, day, 0.5, current);
+        if (slot && slot.endDecimal <= dayEnd) {
+            const gapStart = slot.endDecimal - 0.5; // We found 0.5, but maybe there is more?
+            // Actually findUrgentSlot returns the *first* gap that fits.
+            // We need a function that returns the gap size.
+            
+            // For prototype: Assume 1h gaps found one by one
+            gaps.push({ start: gapStart, end: slot.endDecimal, duration: 0.5 });
+            current = slot.endDecimal;
+        } else {
+            current += 0.5; // Skip busy
+        }
+    }
+    return gaps;
+}
+
+function formatTimeRange(start, end) {
+    const h1 = Math.floor(start);
+    const m1 = Math.round((start - h1) * 60);
+    const h2 = Math.floor(end);
+    const m2 = Math.round((end - h2) * 60);
+    return `${h1.toString().padStart(2,'0')}:${m1.toString().padStart(2,'0')}-${h2.toString().padStart(2,'0')}:${m2.toString().padStart(2,'0')}`;
+}
+
+/**
+ * Calculate Urgent/Overbooking Plan (Scenario D)
+ * Stratégie : Trouve le PREMIER créneau disponible (Heures Standard OU Heures Sup)
+ * à partir de maintenant, en respectant l'ordre chronologique.
+ */
+function calculateOverbookingPlan(order) {
+    const result = {
+        feasible: true,
+        slots: [],
+        totalOvertimeHours: 0,
+        reason: ''
+    };
+    
+    const now = new Date();
+    const currentWeekNum = getWeekNumber(now);
+    
+    if (semaineSelectionnee < currentWeekNum) {
+        return { feasible: false, reason: "Semaine passée", slots: [], totalOvertimeHours: 0 };
+    }
+
+    // Déterminer le moment de départ "Réel"
+    let realStartDayIdx = 0;
+    let realStartHour = 0;
+
+    if (semaineSelectionnee === currentWeekNum) {
+        let todayJs = now.getDay(); // 0=Dim, 1=Lun
+        let todayIdx = todayJs - 1; 
+        if (todayIdx === -1) todayIdx = 6;
+        
+        realStartDayIdx = todayIdx;
+        
+        // On ne peut pas commencer avant "maintenant"
+        const h = now.getHours() + now.getMinutes() / 60;
+        realStartHour = h;
+    }
+
+    // Curseur temporel
+    let currentSimulatedTime = { 
+        week: semaineSelectionnee, 
+        dayIdx: realStartDayIdx, 
+        minHour: realStartHour 
+    }; 
+
+    // 🔒 Trier les opérations
+    const sortedOperations = [...order.operations].sort((a, b) => {
+        const orderMap = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
+        return (orderMap[a.type] || 99) - (orderMap[b.type] || 99);
+    });
+
+    for (const op of sortedOperations) {
+        if (op.slots.length > 0) continue; 
+
+        let machines = [];
+        if (op.type === 'Cisaillage') machines = MACHINES.cisailles;
+        else if (op.type === 'Poinçonnage') machines = MACHINES.poinconneuses;
+        else if (op.type === 'Pliage') machines = MACHINES.plieuses;
+        
+        let placed = false;
+        
+        // On commence la recherche au jour courant du curseur
+        // Si on est le même jour que l'op précédente, minHour est la fin de l'op précédente.
+        // Sinon, c'est 0 (début de journée).
+        let startDayIdx = currentSimulatedTime.dayIdx;
+        
+        for (let d = startDayIdx; d < 5; d++) { // Lundi-Vendredi
+            const dayName = DAYS_OF_WEEK[d];
+            
+            // Si on est sur le jour de départ (ex: Aujourd'hui), on respecte l'heure minimale
+            // Sinon (Jour suivant), on commence à l'ouverture (0)
+            const minStart = (d === currentSimulatedTime.dayIdx) ? currentSimulatedTime.minHour : 0;
+
+            for (const machine of machines) {
+                // Chercher un créneau sur TOUTE la journée étendue (Standard + Overtime)
+                const slot = findUrgentSlot(machine, dayName, op.dureeTotal, minStart);
+                
+                if (slot) {
+                    result.slots.push({
+                        machine: machine,
+                        day: dayName,
+                        hours: op.dureeTotal, 
+                        timeRange: slot.range, // ex: "14:00-16:00"
+                        opType: op.type
+                    });
+                    
+                    // On compte tout en "heures sup" pour le tracking (car mode urgence)
+                    // Ou on pourrait affiner, mais gardons simple pour l'indicateur visuel
+                    result.totalOvertimeHours += op.dureeTotal;
+                    
+                    // Mise à jour du curseur pour la suivante
+                    currentSimulatedTime.dayIdx = d;
+                    currentSimulatedTime.minHour = slot.endDecimal; 
+                    
+                    placed = true;
+                    break;
+                }
+            }
+            if (placed) break;
+            
+            // Si on change de jour, le minHour se réinitialise implicitement par la logique ci-dessus
+        }
+        
+        if (!placed) {
+            result.feasible = false;
+            result.reason = `Aucun créneau (Standard ou Sup) trouvé pour ${op.type}`;
+            break;
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Trouve un créneau urgent sur la journée étendue (Matin -> Fin Heures Sup)
+ * Respecte la pause déjeuner existante.
+ */
+function findUrgentSlot(machine, day, duration, minStartHour = 0) {
+    // 1. Définir les bornes de la journée étendue
+    const dayStart = day === 'Vendredi' ? 7.0 : 7.5;
+    
+    // Fin absolue (Standard + Max Heures Sup)
+    // Lun-Jeu: 16:30 + 1.5 = 18:00
+    // Ven: 12:00 + 2.0 = 14:00
+    const dayEnd = day === 'Vendredi' ? 14.0 : 18.0;
+    
+    // Le début effectif ne peut pas être avant l'ouverture
+    let searchStart = Math.max(dayStart, minStartHour);
+    
+    // Si la durée dépasse le temps restant total possible
+    if (searchStart + duration > dayEnd) return null;
+
+    // 2. Récupérer tous les créneaux OCCUPÉS (Standard + Overtime déjà placés)
+    const placedOrders = getPlacedOrders();
+    const busySlots = placedOrders
+        .flatMap(c => c.operations)
+        .flatMap(o => o.slots)
+        .filter(s => s.machine === machine && s.jour === day)
+        .map(s => ({
+            start: timeToDecimalHours(s.heureDebut),
+            end: timeToDecimalHours(s.heureFin)
+        }));
+
+    // Ajouter la pause déjeuner comme un créneau occupé (Lun-Jeu)
+    if (day !== 'Vendredi') {
+        busySlots.push({ start: 12.5, end: 13.0 }); // 12:30-13:00
+    }
+
+    // Trier les créneaux occupés
+    busySlots.sort((a, b) => a.start - b.start);
+
+    // 3. Chercher un trou (Gap)
+    let currentPointer = searchStart;
+
+    for (const busy of busySlots) {
+        // Le trou est entre currentPointer et busy.start
+        // On doit vérifier si le trou est valide (start < end)
+        // Et si la durée rentre
+        
+        // Ajuster le début du trou si nécessaire (si currentPointer est avant busy.start)
+        if (currentPointer < busy.start) {
+            const gapSize = busy.start - currentPointer;
+            if (gapSize >= duration - 0.001) { // Tolérance float
+                // Trouvé !
+                return formatSlotResult(currentPointer, currentPointer + duration);
+            }
+        }
+        
+        // Avancer le pointeur après le créneau occupé
+        // Attention: si le créneau occupé finissait avant notre pointeur actuel, on ne recule pas
+        currentPointer = Math.max(currentPointer, busy.end);
+    }
+
+    // 4. Vérifier le dernier trou (après la dernière occupation jusqu'à la fin de journée)
+    if (currentPointer + duration <= dayEnd + 0.001) {
+        return formatSlotResult(currentPointer, currentPointer + duration);
+    }
+
+    return null;
+}
+
+function formatSlotResult(start, end) {
+    const hStart = Math.floor(start);
+    const mStart = Math.round((start - hStart) * 60);
+    const hEnd = Math.floor(end);
+    const mEnd = Math.round((end - hEnd) * 60);
+    
+    const timeRangeStr = `${hStart.toString().padStart(2,'0')}:${mStart.toString().padStart(2,'0')}-${hEnd.toString().padStart(2,'0')}:${mEnd.toString().padStart(2,'0')}`;
+    
+    return { 
+        range: timeRangeStr, 
+        endDecimal: end 
+    };
+}
+
+/**
+ * Render Scenario Cards
+ */
+function renderScenariosSelection() {
+    const container = document.getElementById('scenariosList');
+    let html = '';
+    
+    currentScenarios.forEach(scenario => {
+        const disabledClass = scenario.disabled ? 'opacity:0.6; pointer-events:none;' : '';
+        const overtimeClass = scenario.id === 'D' ? 'overtime' : '';
+        
+        html += `
+            <div class="scenario-card ${overtimeClass}" style="${disabledClass}" onclick="selectScenario('${scenario.id}')" id="scenario-${scenario.id}">
+                <div class="scenario-header">
+                    <span class="scenario-title">${scenario.icon} ${scenario.name}</span>
+                    <span class="scenario-badge ${scenario.badge}">${scenario.id}</span>
+                </div>
+                <div style="margin-bottom:8px; font-weight:500;">${scenario.strategy}</div>
+                
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; font-size:0.9em; color:#666;">
+                    <div>Faisabilité: <strong>${scenario.metrics.feasibility}</strong></div>
+                    <div>Impact: <span class="impact-stars">${'★'.repeat(scenario.metrics.impact_score)}</span></div>
+                </div>
+                
+                ${scenario.metrics.details ? `<div style="margin-top:8px; font-size:0.9em; color:#d63384;">${scenario.metrics.details}</div>` : ''}
+                
+                ${scenario.warnings ? `
+                    <div style="margin-top:8px; font-size:0.85em; color:#dc3545; background:#fff5f5; padding:4px; border-radius:4px;">
+                        ⚠️ ${scenario.warnings[0]}
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+}
+
+/**
+ * Select a Scenario
+ */
+function selectScenario(id) {
+    document.querySelectorAll('.scenario-card').forEach(el => el.classList.remove('selected'));
+    document.getElementById(`scenario-${id}`).classList.add('selected');
+    
+    currentScenario = currentScenarios.find(s => s.id === id);
+    document.getElementById('btnValidateScenario').disabled = false;
+}
+
+// ------------------------------------------------------------------
+// Handlers
+// ------------------------------------------------------------------
+
+document.getElementById('btnInsertUrgent')?.addEventListener('click', showUrgentInsertionModal);
+
+document.getElementById('btnCancelUrgent')?.addEventListener('click', () => {
+    document.getElementById('modalUrgentInsertion').classList.remove('active');
+});
+
+document.getElementById('btnNextToScenarios')?.addEventListener('click', handleNextToScenarios);
+
+document.getElementById('btnBackToOrders')?.addEventListener('click', () => {
+    document.getElementById('stepSelectScenario').classList.remove('active');
+    document.getElementById('stepSelectOrder').classList.add('active');
+});
+
+document.getElementById('btnValidateScenario')?.addEventListener('click', () => {
+    if (!currentScenario) return;
+    
+    if (currentScenario.id === 'D') {
+        // Go to confirmation step
+        document.getElementById('stepSelectScenario').classList.remove('active');
+        document.getElementById('stepConfirmOvertime').classList.add('active');
+        
+        // Render details
+        let detailsHtml = `<strong>Résumé Heures Supplémentaires :</strong><br>`;
+        detailsHtml += `Total: ${currentScenario.metrics.overtime_hours}h<br>`;
+        detailsHtml += `<ul style="margin-left:20px; margin-top:8px;">`;
+        currentScenario.actions.overbooking_slots.forEach(slot => {
+            detailsHtml += `<li>${slot.day} - ${slot.machine} (${slot.opType}): ${slot.hours}h</li>`;
+        });
+        detailsHtml += `</ul>`;
+        document.getElementById('overtimeDetails').innerHTML = detailsHtml;
+        
+        checkConfirmationState();
+    } else {
+        // Apply immediately for A
+        applyScenario(currentScenario, currentUrgentOrder);
+        document.getElementById('modalUrgentInsertion').classList.remove('active');
+    }
+});
+
+// Confirmation Logic
+function checkConfirmationState() {
+    const c1 = document.getElementById('checkOperators').checked;
+    const c2 = document.getElementById('checkMaintenance').checked;
+    const c3 = document.getElementById('checkApproval').checked;
+    document.getElementById('btnConfirmOvertime').disabled = !(c1 && c2 && c3);
+}
+
+document.getElementById('checkOperators')?.addEventListener('change', checkConfirmationState);
+document.getElementById('checkMaintenance')?.addEventListener('change', checkConfirmationState);
+document.getElementById('checkApproval')?.addEventListener('change', checkConfirmationState);
+
+document.getElementById('btnBackToScenarios')?.addEventListener('click', () => {
+    document.getElementById('stepConfirmOvertime').classList.remove('active');
+    document.getElementById('stepSelectScenario').classList.add('active');
+});
+
+document.getElementById('btnConfirmOvertime')?.addEventListener('click', () => {
+    applyScenario(currentScenario, currentUrgentOrder);
+    document.getElementById('modalUrgentInsertion').classList.remove('active');
+});
+
+/**
+ * Apply Scenario Logic
+ */
+function applyScenario(scenario, selectedOrder) {
+    // 1. Validate
+    if (scenario.id === 'D') {
+        // Double check limits just in case
+    }
+    
+    // 2. Apply Overtime Slots
+    if (scenario.actions.overbooking_slots) {
+        scenario.actions.overbooking_slots.forEach(slot => {
+            // Find operation
+            const operation = selectedOrder.operations.find(op => op.type === slot.opType);
+            if (!operation) return;
+            
+            const startHourStr = slot.timeRange.split('-')[0];
+            const startDecimal = timeToDecimalHours(startHourStr);
+            const endDecimal = startDecimal + slot.hours;
+            
+            const endHour = Math.floor(endDecimal);
+            const endMinute = Math.round((endDecimal - endHour) * 60);
+            const endTimeStr = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
+            
+            const dateDebut = getDateFromWeekDay(semaineSelectionnee, slot.day, startHourStr);
+            const dateFin = getDateFromWeekDay(semaineSelectionnee, slot.day, endTimeStr);
+            
+            operation.slots.push({
+                machine: slot.machine,
+                duree: slot.hours,
+                semaine: semaineSelectionnee,
+                jour: slot.day,
+                heureDebut: startHourStr,
+                heureFin: endTimeStr,
+                dateDebut: dateDebut.toISOString().split('.')[0],
+                dateFin: dateFin.toISOString().split('.')[0],
+                overtime: true
+            });
+            operation.statut = "Planifiée";
+        });
+        
+        // Track
+        if (scenario.id === 'D') {
+            trackOvertimeUsage(scenario);
+        }
+    }
+    
+    // 3. Finalize
+    const allPlaced = selectedOrder.operations.every(op => op.slots.length > 0);
+    if (allPlaced) selectedOrder.statut = "Planifiée";
+    
+    syncManager.saveLocalData();
+    refresh();
+    Toast.success(`Commande ${selectedOrder.id} insérée (Scénario ${scenario.id})`);
+}
+
+/**
+ * Track Overtime Usage
+ */
+function trackOvertimeUsage(scenario) {
+    if (!scenario.actions.overbooking_slots) return;
+    
+    scenario.actions.overbooking_slots.forEach(slot => {
+        overtimeTracker.totalHoursUsed += slot.hours;
+        
+        if (!overtimeTracker.byMachine[slot.machine]) {
+            overtimeTracker.byMachine[slot.machine] = { hours: 0 };
+        }
+        overtimeTracker.byMachine[slot.machine].hours += slot.hours;
+        
+        if (!overtimeTracker.byDay[slot.day]) {
+            overtimeTracker.byDay[slot.day] = 0;
+        }
+        overtimeTracker.byDay[slot.day] += slot.hours;
     });
 }
 

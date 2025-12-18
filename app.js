@@ -1492,7 +1492,17 @@ function validateOperationOrder(commande) {
  */
 function canPlaceOperation(commande, operation, targetWeek, targetDay, targetStartTime = '09:00') {
     const operations = commande.operations;
-    const operationIndex = operations.indexOf(operation);
+
+    // Define canonical order priority
+    const priority = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
+
+    // Create a sorted list of operations present in this command
+    // This ensures we always check against the correct logical predecessor/successor
+    const sortedOps = [...operations].sort((a, b) => {
+        return (priority[a.type] || 99) - (priority[b.type] || 99);
+    });
+
+    const operationIndex = sortedOps.indexOf(operation);
 
     if (operationIndex === -1) {
         return { valid: false, message: 'Opération non trouvée dans la commande' };
@@ -1507,11 +1517,18 @@ function canPlaceOperation(commande, operation, targetWeek, targetDay, targetSta
 
     // 🔒 RÈGLE 1: Si l'opération PRÉCÉDENTE est placée, elle doit SE TERMINER AVANT le début de celle-ci
     if (operationIndex > 0) {
-        const previousOp = operations[operationIndex - 1];
+        const previousOp = sortedOps[operationIndex - 1]; // Use sorted list
 
         if (previousOp.slots && previousOp.slots.length > 0) {
             // Trouver la date de fin de la dernière slot de l'opération précédente
-            const previousLastSlot = previousOp.slots[previousOp.slots.length - 1];
+            // We need the absolute latest end time across all slots
+            const previousLastSlot = [...previousOp.slots].sort((a,b) => {
+                 if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+                 const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+                 if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+                 return a.heureFin.localeCompare(b.heureFin);
+            }).pop();
+            
             const previousEndDate = new Date(previousLastSlot.dateFin || getDateFromWeekDay(previousLastSlot.semaine, previousLastSlot.jour, previousLastSlot.heureFin));
 
 
@@ -1534,12 +1551,19 @@ function canPlaceOperation(commande, operation, targetWeek, targetDay, targetSta
     }
 
     // 🔒 RÈGLE 2: Si l'opération SUIVANTE est placée, celle-ci doit SE TERMINER AVANT son début
-    if (operationIndex < operations.length - 1) {
-        const nextOp = operations[operationIndex + 1];
+    if (operationIndex < sortedOps.length - 1) {
+        const nextOp = sortedOps[operationIndex + 1]; // Use sorted list
 
         if (nextOp.slots && nextOp.slots.length > 0) {
             // Trouver la date de début de la première slot de l'opération suivante
-            const nextFirstSlot = nextOp.slots[0];
+            // We need the absolute earliest start time
+            const nextFirstSlot = [...nextOp.slots].sort((a,b) => {
+                 if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+                 const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+                 if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+                 return a.heureDebut.localeCompare(b.heureDebut);
+            })[0];
+            
             const nextStartDate = new Date(nextFirstSlot.dateDebut || getDateFromWeekDay(nextFirstSlot.semaine, nextFirstSlot.jour, nextFirstSlot.heureDebut));
 
             // Comparaison stricte: fin actuelle doit être <= début suivante
@@ -2104,6 +2128,71 @@ function initDragAndDrop() {
         zone.addEventListener('drop', handleDrop);
         zone.addEventListener('dragleave', handleDragLeave);
     });
+
+    // Sidebar Drop Zone (To unplan)
+    const sidebarZone = document.getElementById('unplacedOrdersContainer');
+    if (sidebarZone) {
+        sidebarZone.addEventListener('dragover', handleDragOver);
+        sidebarZone.addEventListener('drop', handleSidebarDrop);
+        sidebarZone.addEventListener('dragleave', handleDragLeave);
+    }
+}
+
+/**
+ * Handle drop on sidebar (Unplan operation)
+ */
+function handleSidebarDrop(e) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+
+    if (!draggedOperation) return;
+
+    // We only care about operations dragged FROM the planning (not from sidebar itself)
+    if (draggedOperation.fromSidebar) return;
+
+    const cmd = commandes.find(c => c.id === draggedOperation.commandeId);
+    if (!cmd) return;
+
+    const operation = cmd.operations.find(op => op.type === draggedOperation.operationType);
+    if (!operation) return;
+
+    if (!confirm(`Retirer ${operation.type} de la commande ${cmd.id} du planning ?\nCela retirera également les opérations suivantes (ordre chronologique).`)) {
+        return;
+    }
+
+    // UNPLAN LOGIC: Remove this op AND all subsequent ops
+    // Order: Cisaillage -> Poinçonnage -> Pliage
+    const priority = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
+    const currentPriority = priority[operation.type] || 99;
+
+    let removedCount = 0;
+
+    cmd.operations.forEach(op => {
+        const opPriority = priority[op.type] || 99;
+        
+        // If this operation is the one dragged OR comes AFTER it in sequence
+        if (opPriority >= currentPriority) {
+            if (op.slots && op.slots.length > 0) {
+                op.slots = [];
+                op.statut = "Non placée";
+                op.progressionReelle = 0;
+                removedCount++;
+            }
+        }
+    });
+
+    // Update main command status
+    const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
+    const anyPlaced = cmd.operations.some(op => op.slots && op.slots.length > 0);
+    
+    if (allPlaced) cmd.statut = "Planifiée";
+    else if (anyPlaced) cmd.statut = "En cours"; // Partially placed
+    else cmd.statut = "Non placée";
+
+    historyManager.saveState(`Unplan ${cmd.id} (${removedCount} ops)`);
+    syncManager.saveLocalData();
+    refresh();
+    Toast.info(`${removedCount} opération(s) retirée(s) du planning`);
 }
 
 function handleDragStart(e) {
@@ -2226,205 +2315,114 @@ function handleDrop(e) {
 
     if (!draggedOperation) return;
 
-    // Determine start time based on drop zone (or use findFirstAvailableGap)
-    let startHour = 9; // Default
-    if (targetHour) {
-        startHour = parseInt(targetHour);
-    }
-
-    // Find the command and operation
+    // 1. Identify Command & Operation
     const cmd = commandes.find(c => c.id === draggedOperation.commandeId);
     if (!cmd) return;
-
     const operation = cmd.operations.find(op => op.type === draggedOperation.operationType);
     if (!operation) return;
 
-    // CASE 1: Drag from sidebar
-    if (draggedOperation.fromSidebar) {
-        let bestSlot = null;
-        let forcedPlacement = false;
+    // 2. Backup current state (in case of failure)
+    const originalSlots = JSON.parse(JSON.stringify(operation.slots));
+    const originalStatut = operation.statut;
 
-        // NEW: Check if dropped on a specific target (Machine + Day + Week)
-        if (targetMachine && targetDay && targetWeek) {
-            let proposedStartTime = null;
+    // 3. Temporarily remove the slot being dragged to avoid self-collision
+    if (!draggedOperation.fromSidebar) {
+        operation.slots = []; 
+    }
 
-            if (targetTime) {
-                // Dropped on a specific time slot (e.g. 07:30)
-                proposedStartTime = targetTime;
-            } else if (targetHour) {
-                // Fallback (should be covered by targetTime now)
-                proposedStartTime = `${targetHour.toString().padStart(2, '0')}:00`;
-            } else {
-                // Dropped on the day/machine column generally?
-                // Try to find first gap on THIS machine/day
-                proposedStartTime = findFirstAvailableGap(targetMachine, targetDay, targetWeek, operation.dureeTotal);
-            }
+    // 4. Calculate Search Start Time
+    // A. User Drop Time
+    let dropDecimal = 7.5; // Default morning
+    if (targetHour) {
+        dropDecimal = parseFloat(targetHour);
+    }
+    if (targetTime) {
+        // Refine with minutes if available
+        const parts = targetTime.split(':');
+        dropDecimal = parseInt(parts[0]) + parseInt(parts[1]) / 60;
+    }
 
-            if (proposedStartTime) {
-                // 1. Check Availability at this specific time
-                const availability = isMachineAvailable(targetMachine, targetDay, targetWeek, proposedStartTime, operation.dureeTotal);
+    // B. Chronology Constraint (Previous Operation End)
+    let chronologyMinDecimal = 0;
+    
+    // Find previous operation
+    const opIndex = cmd.operations.indexOf(operation);
+    if (opIndex > 0) {
+        const prevOp = cmd.operations[opIndex - 1];
+        if (prevOp.slots && prevOp.slots.length > 0) {
+            // Find the latest end time of the previous op
+            const lastSlot = [...prevOp.slots].sort((a,b) => {
+                if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+                const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+                if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+                return a.heureFin.localeCompare(b.heureFin);
+            }).pop();
+
+            if (lastSlot.semaine > targetWeek) {
+                restoreAndAlert("Impossible : L'opération précédente termine une semaine plus tard.");
+                return;
+            } else if (lastSlot.semaine === targetWeek) {
+                const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+                const prevDayIdx = days.indexOf(lastSlot.jour);
+                const targetDayIdx = days.indexOf(targetDay);
                 
-                if (availability.valid) {
-                    // 2. Check Chronology (canPlaceOperation)
-                    const validation = canPlaceOperation(cmd, operation, targetWeek, targetDay, proposedStartTime);
-                    
-                    if (validation.valid) {
-                         // Create a "bestSlot" object to reuse the placement logic below
-                         bestSlot = {
-                             machine: targetMachine,
-                             week: targetWeek,
-                             day: targetDay,
-                             startTime: proposedStartTime,
-                             loadScore: 0 // Irrelevant for manual placement
-                         };
-                         forcedPlacement = true;
-                    } else {
-                        // Chronology error - Show alert and stop
-                        alert('⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n' + validation.message);
-                        return;
-                    }
-                } else {
-                    // Availability error - Only alert if user tried to force a specific slot
-                    if (targetTime || targetHour) {
-                        alert(`❌ Placement impossible :\n${availability.reason}`);
-                        return;
-                    }
+                if (prevDayIdx > targetDayIdx) {
+                     restoreAndAlert("Impossible : L'opération précédente termine un jour plus tard.");
+                     return;
+                } else if (prevDayIdx === targetDayIdx) {
+                    const endParts = lastSlot.heureFin.split(':');
+                    chronologyMinDecimal = parseInt(endParts[0]) + parseInt(endParts[1]) / 60;
                 }
             }
         }
+    }
 
-        // If no forced placement (or it failed silently for generic drop), fall back to auto-placement
-        if (!bestSlot) {
-             // Get available machines for this operation type
-            let availableMachines = [];
-            if (operation.type === 'Cisaillage') availableMachines = MACHINES.cisailles;
-            else if (operation.type === 'Poinçonnage') availableMachines = MACHINES.poinconneuses;
-            else if (operation.type === 'Pliage') availableMachines = MACHINES.plieuses;
+    // C. Effective Search Start
+    const effectiveSearchStart = Math.max(dropDecimal, chronologyMinDecimal);
+    const effectiveSearchTimeStr = formatDecimalTime(effectiveSearchStart);
 
-            // 🎯 Find best slot with load balancing (not forced on targetMachine)
-            bestSlot = findBestMachineSlot(operation, cmd, availableMachines);
-        }
+    // 5. Find Gap
+    const gapStart = findFirstAvailableGap(targetMachine, targetDay, targetWeek, operation.dureeTotal, effectiveSearchTimeStr);
 
-        if (!bestSlot) {
-            alert(`❌ Impossible de placer ${operation.type}. Aucun créneau disponible respectant l'ordre chronologique.`);
-            refresh();
-            return;
-        }
+    if (gapStart) {
+        // Gap found! Calculate end time
+        const startParts = gapStart.split(':');
+        const startDec = parseInt(startParts[0]) + parseInt(startParts[1])/60;
+        const endDec = startDec + operation.dureeTotal;
+        const endTimeStr = formatDecimalTime(endDec);
 
-        // Calculate end time
-        const startTimeParts = bestSlot.startTime.split(':');
-        const startHourCalc = parseInt(startTimeParts[0]) + parseInt(startTimeParts[1]) / 60;
-        
-        // Adjust for lunch break if crossing it (Mon-Thu)
-        let effectiveDuration = operation.dureeTotal;
-        const lunchStart = 12.5; // 12:30
-        
-        if (bestSlot.day !== 'Vendredi' && startHourCalc < lunchStart && (startHourCalc + effectiveDuration) > lunchStart) {
-            effectiveDuration += 0.5; // Add 30min break
-        }
-
-        const endHourFloat = startHourCalc + effectiveDuration;
-        const endHour = Math.floor(endHourFloat);
-        const endMinute = Math.round((endHourFloat - endHour) * 60);
-        const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
-
-        // Create new slot with best machine
-        const dateDebut = getDateFromWeekDay(bestSlot.week, bestSlot.day, bestSlot.startTime);
-        const dateFin = getDateFromWeekDay(bestSlot.week, bestSlot.day, endTime);
-
+        // 6. Apply New Slot
         operation.slots.push({
-            machine: bestSlot.machine,
+            machine: targetMachine,
             duree: operation.dureeTotal,
-            semaine: bestSlot.week,
-            jour: bestSlot.day,
-            heureDebut: bestSlot.startTime,
-            heureFin: endTime,
-            dateDebut: dateDebut.toISOString().split('.')[0],
-            dateFin: dateFin.toISOString().split('.')[0]
+            semaine: targetWeek,
+            jour: targetDay,
+            heureDebut: gapStart,
+            heureFin: endTimeStr,
+            dateDebut: getDateFromWeekDay(targetWeek, targetDay, gapStart).toISOString(),
+            dateFin: getDateFromWeekDay(targetWeek, targetDay, endTimeStr).toISOString()
         });
-
         operation.statut = "Planifiée";
+        
+        // Update main status
+        if (cmd.operations.every(o => o.slots.length > 0)) cmd.statut = "Planifiée";
+        else cmd.statut = "En cours";
 
-        const typeMsg = forcedPlacement ? "Drag manuel" : "Drag auto";
-        console.log(`✅ ${typeMsg}: Placé ${operation.type} sur ${bestSlot.machine} - S${bestSlot.week} ${bestSlot.day} ${bestSlot.startTime}`);
-
-        // Update command status if all operations placed
-        const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
-        if (allPlaced) {
-            cmd.statut = "Planifiée";
-        }
-
-        historyManager.saveState(`Déplacement ${operation.type}`);
+        historyManager.saveState(`Move ${operation.type} ${cmd.id}`);
+        syncManager.saveLocalData();
         refresh();
-        return;
+        Toast.success(`Placé à ${gapStart}`);
+
+    } else {
+        restoreAndAlert(`Pas d'espace suffisant à partir de ${effectiveSearchTimeStr} pour ${formatHours(operation.dureeTotal)}`);
     }
 
-    // CASE 2: Drag from planning (move existing slot)
-    if (operation.slots.length === 0) return;
-
-    // Trouver le slot spécifique qui est déplacé en utilisant slotId
-    const draggedSlotId = draggedOperation.slotId;
-    const slot = operation.slots.find(s => {
-        const sId = `${s.semaine}_${s.jour}_${s.heureDebut}`;
-        return sId === draggedSlotId;
-    });
-
-    if (!slot) {
-        console.error('Slot non trouvé:', draggedSlotId);
-        return;
+    function restoreAndAlert(msg) {
+        operation.slots = originalSlots;
+        operation.statut = originalStatut;
+        alert(msg);
+        refresh(); // Re-render to show original
     }
-
-    const startTime = `${startHour.toString().padStart(2, '0')}:00`;
-
-    // Calculer les nouvelles valeurs AVANT la validation
-    // Utiliser la durée du SLOT spécifique (pas dureeTotal de l'opération)
-    const endHour = startHour + slot.duree;
-    const endTime = `${Math.floor(endHour).toString().padStart(2, '0')}:${Math.round((endHour % 1) * 60).toString().padStart(2, '0')}`;
-    const newStartDate = getDateFromWeekDay(targetWeek, targetDay, startTime);
-    const newEndDate = getDateFromWeekDay(targetWeek, targetDay, endTime);
-
-    // Sauvegarder les anciennes valeurs du slot
-    const oldSlotData = {
-        machine: slot.machine,
-        jour: slot.jour,
-        semaine: slot.semaine,
-        heureDebut: slot.heureDebut,
-        heureFin: slot.heureFin,
-        dateDebut: slot.dateDebut,
-        dateFin: slot.dateFin
-    };
-
-    // Appliquer temporairement les nouvelles valeurs pour la validation
-    slot.machine = targetMachine;
-    slot.jour = targetDay;
-    slot.semaine = targetWeek;
-    slot.heureDebut = startTime;
-    slot.heureFin = endTime;
-    slot.dateDebut = newStartDate.toISOString().split('.')[0];
-    slot.dateFin = newEndDate.toISOString().split('.')[0];
-
-    // 🔒 VALIDATION CRITIQUE: Vérifier l'ordre chronologique avec les NOUVELLES valeurs
-    const validation = canPlaceOperation(cmd, operation, targetWeek, targetDay, startTime);
-
-    if (!validation.valid) {
-        // Restaurer les anciennes valeurs si la validation échoue
-        slot.machine = oldSlotData.machine;
-        slot.jour = oldSlotData.jour;
-        slot.semaine = oldSlotData.semaine;
-        slot.heureDebut = oldSlotData.heureDebut;
-        slot.heureFin = oldSlotData.heureFin;
-        slot.dateDebut = oldSlotData.dateDebut;
-        slot.dateFin = oldSlotData.dateFin;
-
-        alert('⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n' + validation.message);
-        renderVueJournee();
-        return;
-    }
-
-    // ✅ Validation OK - les nouvelles valeurs sont déjà appliquées
-    historyManager.saveState('Modification planning');
-    // Re-render
-    renderVueJournee();
 }
 
 // ===================================

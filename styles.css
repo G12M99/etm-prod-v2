@@ -269,6 +269,20 @@ body {
     font-style: italic;
 }
 
+.drop-zone-sidebar {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--spacing-sm);
+    min-height: 200px;
+    border: 2px solid transparent;
+    transition: all 0.2s;
+}
+
+.drop-zone-sidebar.drag-over {
+    border-color: var(--color-primary);
+    background-color: rgba(13, 110, 253, 0.1);
+}
+
 /* Commande non placée card */
 .commande-non-placee {
     background-color: var(--color-surface);

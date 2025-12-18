@@ -310,6 +310,84 @@ function mapSheetRowToOrder(row) {
 }
 
 // ===================================
+// ⏪ UNDO/REDO SYSTEM
+// ===================================
+
+class HistoryManager {
+    constructor() {
+        this.history = [];
+        this.currentIndex = -1;
+        this.maxHistory = 50; // Limit memory usage
+        this.isNavigating = false;
+    }
+
+    // Save current state
+    saveState(actionName) {
+        if (this.isNavigating) return;
+
+        // Create deep copy of commandes
+        const state = JSON.parse(JSON.stringify(commandes));
+
+        // If we are in the middle of history, cut off the future
+        if (this.currentIndex < this.history.length - 1) {
+            this.history = this.history.slice(0, this.currentIndex + 1);
+        }
+
+        this.history.push({ state: state, action: actionName, timestamp: new Date() });
+        
+        // Limit size
+        if (this.history.length > this.maxHistory) {
+            this.history.shift();
+        } else {
+            this.currentIndex++;
+        }
+
+        console.log(`💾 State Saved: ${actionName} (Index: ${this.currentIndex})`);
+        this.updateUI();
+    }
+
+    // Undo
+    undo() {
+        if (this.currentIndex > 0) {
+            this.isNavigating = true;
+            this.currentIndex--;
+            this.restoreState(this.history[this.currentIndex]);
+            this.isNavigating = false;
+            Toast.info(`Annuler : ${this.history[this.currentIndex + 1].action}`);
+        } else {
+            console.log('End of undo history');
+        }
+    }
+
+    // Redo
+    redo() {
+        if (this.currentIndex < this.history.length - 1) {
+            this.isNavigating = true;
+            this.currentIndex++;
+            this.restoreState(this.history[this.currentIndex]);
+            this.isNavigating = false;
+            Toast.info(`Rétablir : ${this.history[this.currentIndex].action}`);
+        } else {
+            console.log('End of redo history');
+        }
+    }
+
+    // Restore state to app
+    restoreState(snapshot) {
+        commandes = JSON.parse(JSON.stringify(snapshot.state));
+        refresh(); // Re-render everything
+        if (typeof syncManager !== 'undefined') syncManager.saveLocalData(); // Persist
+    }
+    
+    // Update UI (optional buttons?)
+    updateUI() {
+        // Could enable/disable undo/redo buttons if we had them
+    }
+}
+
+const historyManager = new HistoryManager();
+
+// ===================================
 // Data Loading
 // ===================================
 
@@ -2289,6 +2367,7 @@ function handleDrop(e) {
             cmd.statut = "Planifiée";
         }
 
+        historyManager.saveState(`Déplacement ${operation.type}`);
         refresh();
         return;
     }
@@ -2356,6 +2435,7 @@ function handleDrop(e) {
     }
 
     // ✅ Validation OK - les nouvelles valeurs sont déjà appliquées
+    historyManager.saveState('Modification planning');
     // Re-render
     renderVueJournee();
 }
@@ -2486,6 +2566,8 @@ function placerAutomatiquement(commandeId) {
     } else {
         alert(`⚠️ Commande ${commandeId} partiellement placée. Certaines opérations n'ont pas pu être placées.`);
     }
+
+    historyManager.saveState(`Auto-place ${commandeId}`);
 
     // Re-render
     refresh();
@@ -2626,6 +2708,12 @@ class DataSyncManager {
                     commandes = data;
                     console.log(`✅ Loaded ${commandes.length} orders from Local Storage.`);
                     this.updateSyncIndicator('offline', 'Données locales');
+                    
+                    // Init History
+                    if (historyManager.history.length === 0) {
+                        historyManager.saveState('Chargement initial');
+                    }
+                    
                     refresh(); // Render immediately
                 }
             } else {
@@ -2896,6 +2984,7 @@ function unplanCommand(commandeId) {
     // Safe default:
     cmd.statut = "Non placée";
 
+    historyManager.saveState(`Retrait ${commandeId}`);
     refresh();
     Toast.info(`Commande ${commandeId} retirée du planning`);
 }
@@ -3216,6 +3305,19 @@ function initEventHandlers() {
             document.querySelectorAll('.modal.active').forEach(modal => {
                 modal.classList.remove('active');
             });
+        }
+        
+        // Undo: Ctrl + Z
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+            e.preventDefault();
+            historyManager.undo();
+        }
+        
+        // Redo: Ctrl + Y  OR  Ctrl + Shift + Z
+        if (((e.ctrlKey || e.metaKey) && e.key === 'y') || 
+            ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z')) {
+            e.preventDefault();
+            historyManager.redo();
         }
     });
 }
@@ -4069,6 +4171,7 @@ function applyScenario(scenario, selectedOrder) {
     const allPlaced = selectedOrder.operations.every(op => op.slots.length > 0);
     if (allPlaced) selectedOrder.statut = "Planifiée";
     
+    historyManager.saveState(`Insertion ${selectedOrder.id}`);
     syncManager.saveLocalData();
     refresh();
     Toast.success(`Commande ${selectedOrder.id} insérée (Scénario ${scenario.id})`);

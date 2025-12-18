@@ -168,29 +168,35 @@ function timeToDecimalHours(timeStr) {
 }
 
 /**
- * Parse CSV data and return array of rows
+ * Parse CSV data and return array of rows - LEGACY (DISABLED)
  */
 function fetchAndParseCSV() {
+    console.warn('⚠️ CSV parsing disabled - Using Google Sheets only');
+    return [];
+    
+    /* LEGACY CODE - DISABLED
     try {
         const lines = localCsvData.trim().split('\n');
-        const headers = lines[0].split('\t');
+        const headers = lines[0].split(';').map(h => h.trim());
         const rows = [];
 
         for (let i = 1; i < lines.length; i++) {
-            const values = lines[i].split('\t');
+            if (!lines[i].trim()) continue;
+            
+            const values = lines[i].split(';');
             const row = {};
+            
             headers.forEach((header, index) => {
-                row[header] = values[index] || '';
+                row[header] = values[index] ? values[index].trim() : '';
             });
             rows.push(row);
         }
-
-        console.log(`✅ CSV parsed: ${rows.length} rows`);
         return rows;
     } catch (error) {
         console.error('❌ Error parsing CSV:', error);
         return [];
     }
+    */
 }
 
 /**
@@ -391,7 +397,7 @@ const historyManager = new HistoryManager();
 // Data Loading
 // ===================================
 
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw_O3_yBaQJ6QzcJc5bNaEANnqywL__MJvLdFN2ktZS7fE8iajUaSpTWEz4K29HBLTe/exec';
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx-HR3xMw0d6S9MKZQBqKfOzQ4Ta5OVq3UjBwOiYEuP9cFLQfzOg4h0H5uwBnS98dA/exec';
 
 /**
  * Fetch orders from Google Apps Script
@@ -479,25 +485,11 @@ async function fetchOrdersFromGoogleSheet() {
 }
 
 /**
- * Load orders from local CSV (Legacy/Fallback)
+ * Load orders from local CSV (Legacy/Fallback) - DISABLED
  */
 function loadLocalOrders() {
-    try {
-        const rows = fetchAndParseCSV();
-
-        // Filter active orders (case-insensitive)
-        commandes = rows
-            .map(row => mapSheetRowToOrder(row))
-            .filter(cmd => {
-                const status = cmd.statut.toLowerCase().trim();
-                return status === 'en cours' || status === 'en prépa' || status === 'planifiée';
-            });
-
-        console.log(`✅ Orders loaded (Local): ${commandes.length} active orders`);
-    } catch (error) {
-        console.error('❌ Error loading local orders:', error);
-        commandes = [];
-    }
+    console.log('⚠️ Local CSV fallback disabled - Using Google Sheets only');
+    commandes = [];
 }
 
 /**
@@ -1926,7 +1918,7 @@ function renderVueJournee() {
                              data-operation-type="${slot.operationType}"
                              data-slot-id="${slotId}"
                              data-operation='${JSON.stringify({ commandeId: slot.commandeId, operationType: slot.operationType, slotId: slotId }).replace(/'/g, "&#39;")}'
-                             style="position: absolute; top: ${topPosition}px; left: 5px; right: 5px; height: ${heightInPixels}px; z-index: ${slot.overtime ? 20 : 10};">
+                             style="position: absolute; top: ${topPosition}px; left: 5px; right: 5px; height: ${heightInPixels}px; min-height: ${heightInPixels}px; z-index: ${slot.overtime ? 20 : 10};">
                             
                             ${slot.overtime ? '<div class="overtime-indicator"></div>' : ''}
                             
@@ -2698,26 +2690,21 @@ class DataSyncManager {
             const stored = localStorage.getItem(this.STORAGE_KEY);
             if (stored) {
                 const data = JSON.parse(stored);
-                // Basic validation
                 if (Array.isArray(data)) {
                     commandes = data;
                     console.log(`✅ Loaded ${commandes.length} orders from Local Storage.`);
                     this.updateSyncIndicator('offline', 'Données locales');
-                    
-                    // Init History
-                    if (historyManager.history.length === 0) {
-                        historyManager.saveState('Chargement initial');
-                    }
-                    
-                    refresh(); // Render immediately
+                    refresh();
                 }
             } else {
-                console.log('ℹ️ No local data found. Loading demo/legacy.');
-                loadLocalOrders(); // Fallback to CSV string in app.js
+                console.log('ℹ️ No local data found. Waiting for Google Sheets sync...');
+                commandes = []; // FIX: Juste un tableau vide
+                this.updateSyncIndicator('syncing', 'En attente de sync...');
             }
         } catch (e) {
             console.error('❌ Error loading local data:', e);
-            loadLocalOrders();
+            commandes = []; // FIX: Tableau vide au lieu de loadLocalOrders()
+            this.updateSyncIndicator('error', 'Erreur chargement local');
         }
     }
 

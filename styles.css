@@ -946,6 +946,10 @@ body {
     background-color: var(--color-capacity-danger);
 }
 
+.stat-progress-bar.capacity-overtime {
+    background-color: var(--color-capacity-danger);
+}
+
 /* Ensure day-cell arranges children vertically */
 .day-cell {
     display: flex;
@@ -1866,14 +1870,7 @@ body {
 
 /* Zone overbooking (100-105%) */
 .capacity-fill.capacity-overtime {
-    background: repeating-linear-gradient(
-        45deg,
-        #dc3545,
-        #dc3545 10px,
-        #ff6b6b 10px,
-        #ff6b6b 20px
-    );
-    animation: pulse-overtime 2s infinite;
+    background-color: var(--color-capacity-danger);
 }
 
  @keyframes pulse-overtime {

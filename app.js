@@ -1465,28 +1465,23 @@ function formatHours(hours) {
 function validateOperationOrder(commande) {
     const operations = commande.operations;
 
-    // Vérifier que les 3 opérations existent
-    const cisaillage = operations.find(op => op.type === 'Cisaillage');
-    const poinconnage = operations.find(op => op.type === 'Poinçonnage');
-    const pliage = operations.find(op => op.type === 'Pliage');
+    // Define canonical order priority
+    const priority = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
 
-    if (!cisaillage || !poinconnage || !pliage) {
-        return {
-            valid: false,
-            message: 'La commande doit avoir les 3 opérations obligatoires:\n- Cisaillage\n- Poinçonnage\n- Pliage'
-        };
-    }
+    // Check if operations are sorted by priority
+    for (let i = 0; i < operations.length - 1; i++) {
+        const currentOp = operations[i];
+        const nextOp = operations[i + 1];
+        
+        const currentP = priority[currentOp.type] || 0;
+        const nextP = priority[nextOp.type] || 0;
 
-    // Vérifier l'ordre des opérations dans le tableau
-    const cisailleIndex = operations.indexOf(cisaillage);
-    const poinconIndex = operations.indexOf(poinconnage);
-    const pliageIndex = operations.indexOf(pliage);
-
-    if (cisailleIndex > poinconIndex || poinconIndex > pliageIndex) {
-        return {
-            valid: false,
-            message: '⛔ ORDRE DE PRODUCTION INVALIDE\n\nL\'ordre des opérations doit être:\n1. Cisaillage\n2. Poinçonnage\n3. Pliage\n\n❌ Aucune inversion n\'est autorisée!'
-        };
+        if (currentP >= nextP) {
+             return {
+                valid: false,
+                message: `⛔ ORDRE DE PRODUCTION INVALIDE\n\nL'opération "${currentOp.type}" ne peut pas être après ou au même niveau que "${nextOp.type}".\n\nOrdre requis: Cisaillage → Poinçonnage → Pliage`
+            };
+        }
     }
 
     return { valid: true, message: '' };
@@ -2465,20 +2460,20 @@ function placerAutomatiquement(commandeId) {
     const currentWeek = getWeekNumber(now);
     let currentDayIndex = now.getDay() - 1; // 0=Mon, 4=Fri, -1=Sun
     if (currentDayIndex === -1) currentDayIndex = 6;
-    
+
     const currentHour = now.getHours() + now.getMinutes() / 60;
     
-    // Define Rush Hour Windows: 09:00-10:00 OR 12:00-13:30
-    const isRushHour = (currentHour >= 9 && currentHour < 10) || (currentHour >= 12 && currentHour < 13.5);
+    // Define Rush Hour Window: Only Morning 09:00-10:00
+    // Removed Midday window per user request
+    const isRushHour = (currentHour >= 9 && currentHour < 10);
     
     // Only apply logic if Today is a working day (Mon-Fri)
-    // Dynamic: Works for any week
     if (currentDayIndex >= 0 && currentDayIndex < 5) {
         if (isRushHour) {
-            // "Fait a la date d'aujourd'hui" => Force Start Today at 00:00 (allow filling morning gaps)
+             // "Fait a la date d'aujourd'hui" => Force Start Today at 00:00 (allow filling morning gaps)
             globalMinStart = { week: currentWeek, dayIndex: currentDayIndex, timeStr: "00:00" };
-            console.log("🚀 Rush Hour Mode: Prioritizing Today (filling gaps from start of day)!");
-            Toast.info("Mode Prioritaire : Placement sur la journée en cours");
+            console.log("🚀 Rush Hour Mode (Morning): Prioritizing Today (filling gaps from start of day)!");
+            Toast.info("Mode Matin : Optimisation du planning journée");
         } else {
             // "Sinon... ne peut pas placer avant celle-ci" => Start from NOW
             const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
@@ -3455,40 +3450,14 @@ function generateInsertionScenarios(order) {
         });
     }
 
-    // Scénario C: Fractionnement (Split)
-    // On autorise la découpe des opérations pour remplir les petits trous
-    const planC = calculateSplitPlan(order);
-    if (planC.feasible) {
-        const details = planC.isSplit 
-            ? `${planC.splitCount} coupures nécessaires` 
-            : 'Fractionnement non requis (rentre en 1 bloc)';
-            
-        scenarios.push({
-            id: 'C',
-            name: 'Fractionnement',
-            strategy: 'Découpage des opérations',
-            badge: 'badge-C',
-            icon: '✂️',
-            metrics: { 
-                feasibility: 'high', 
-                impact_score: planC.isSplit ? 5 : 3, 
-                details: details
-            },
-            actions: { overbooking_slots: planC.slots },
-            capacity_impact: { overbooking: false }
-        });
-    } else {
-        scenarios.push({ id: 'C', name: 'Fractionnement', strategy: 'Impossible', badge: 'badge-C', icon: '⛔', metrics: { feasibility: 'none' }, disabled: true });
-    }
-    
-    // Scénario D: Urgence Absolue (Overbooking/Heures Sup)
+    // Scénario C: Urgence Absolue (Overbooking/Heures Sup)
     const planD = calculateOverbookingPlan(order);
     if (planD.feasible) {
         scenarios.push({
-            id: 'D',
+            id: 'C',
             name: 'Urgence Prioritaire',
             strategy: 'Forçage (Heures Sup + Priorité)',
-            badge: 'badge-D',
+            badge: 'badge-C',
             icon: '🔥',
             metrics: {
                 feasibility: 'medium',
@@ -4015,7 +3984,7 @@ function renderScenariosSelection() {
     
     currentScenarios.forEach(scenario => {
         const disabledClass = scenario.disabled ? 'opacity:0.6; pointer-events:none;' : '';
-        const overtimeClass = scenario.id === 'D' ? 'overtime' : '';
+        const overtimeClass = scenario.id === 'C' ? 'overtime' : '';
         
         html += `
             <div class="scenario-card ${overtimeClass}" style="${disabledClass}" onclick="selectScenario('${scenario.id}')" id="scenario-${scenario.id}">
@@ -4075,7 +4044,7 @@ document.getElementById('btnBackToOrders')?.addEventListener('click', () => {
 document.getElementById('btnValidateScenario')?.addEventListener('click', () => {
     if (!currentScenario) return;
     
-    if (currentScenario.id === 'D') {
+    if (currentScenario.id === 'C') {
         // Go to confirmation step
         document.getElementById('stepSelectScenario').classList.remove('active');
         document.getElementById('stepConfirmOvertime').classList.add('active');
@@ -4125,7 +4094,7 @@ document.getElementById('btnConfirmOvertime')?.addEventListener('click', () => {
  */
 function applyScenario(scenario, selectedOrder) {
     // 1. Validate
-    if (scenario.id === 'D') {
+    if (scenario.id === 'C') {
         // Double check limits just in case
     }
     
@@ -4162,7 +4131,7 @@ function applyScenario(scenario, selectedOrder) {
         });
         
         // Track
-        if (scenario.id === 'D') {
+        if (scenario.id === 'C') {
             trackOvertimeUsage(scenario);
         }
     }

@@ -4096,6 +4096,51 @@ function trackOvertimeUsage(scenario) {
 }
 
 // ===================================
+// 🖨️ PRINT & EXPORT LOGIC
+// ===================================
+
+document.getElementById('btnPrintPlanning')?.addEventListener('click', showPrintConfig);
+document.getElementById('btnCancelPrint')?.addEventListener('click', () => {
+    document.getElementById('modalPrintConfig').classList.remove('active');
+});
+document.getElementById('btnConfirmPrint')?.addEventListener('click', handlePrint);
+
+function showPrintConfig() {
+    const modal = document.getElementById('modalPrintConfig');
+    const select = document.getElementById('printWeekSelect');
+    
+    // Populate weeks (Current - 1 to Current + 4)
+    select.innerHTML = '';
+    const currentW = getWeekNumber(new Date());
+    for (let i = -1; i <= 4; i++) {
+        const w = currentW + i;
+        const range = getWeekDateRange(w);
+        const option = document.createElement('option');
+        option.value = w;
+        option.text = `Semaine ${w} (${range.start}-${range.end} ${range.month})`;
+        if (w === semaineSelectionnee) option.selected = true;
+        select.appendChild(option);
+    }
+    
+    modal.classList.add('active');
+}
+
+function handlePrint() {
+    const week = parseInt(document.getElementById('printWeekSelect').value);
+    const format = document.querySelector('input[name="printFormat"]:checked').value;
+    
+    // 1. Switch View
+    semaineSelectionnee = week;
+    toggleVue(format); // 'semaine' or 'journee'
+    
+    // 2. Wait for render then Print
+    setTimeout(() => {
+        document.getElementById('modalPrintConfig').classList.remove('active');
+        window.print();
+    }, 500);
+}
+
+// ===================================
 // Initialization
 // ===================================
 

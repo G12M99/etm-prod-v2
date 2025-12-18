@@ -50,16 +50,22 @@
                             </svg>
                             Exporter les données
                         </button>
-                        <button id="btnImportData">
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M8 4v8M8 4l3 3M8 4L5 7M2 2h12" stroke="currentColor" stroke-width="2"/>
-                            </svg>
-                            Importer les données
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
+                                                    <button id="btnImportData">
+                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                            <path d="M8 4v8M8 4l3 3M8 4L5 7M2 2h12" stroke="currentColor" stroke-width="2"/>
+                                                        </svg>
+                                                        Importer les données
+                                                    </button>
+                                                    <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
+                                                    <button id="btnPrintPlanning">
+                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                            <path d="M4 4h8v2H4V4zm8 8H4v-2h8v2zM4 14h8v-2H4v2zm10-7h-1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5H14a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5zM2 5h12v7H2V5z" fill="currentColor"/>
+                                                        </svg>
+                                                        Imprimer Planning
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>        </div>
     </div>
 </header>
 
@@ -109,25 +115,6 @@
                 <div class="legend-item">
                     <span class="legend-box legend-pliage"></span>
                     <span class="legend-label">Pliage</span>
-                </div>
-                <div class="legend-separator"></div>
-                <div class="legend-item">
-                    <div class="legend-capacity">
-                        <div class="legend-capacity-bar capacity-ok" style="width: 60px;"></div>
-                        <span class="legend-label">0-75%</span>
-                    </div>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-capacity">
-                        <div class="legend-capacity-bar capacity-warning" style="width: 60px;"></div>
-                        <span class="legend-label">76-95%</span>
-                    </div>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-capacity">
-                        <div class="legend-capacity-bar capacity-danger" style="width: 60px;"></div>
-                        <span class="legend-label">96-100%</span>
-                    </div>
                 </div>
             </div>
 
@@ -271,6 +258,35 @@
                         <button class="btn btn-secondary" id="btnBackToScenarios">← Retour</button>
                         <button class="btn btn-primary" id="btnConfirmOvertime" disabled>Confirmer et Valider</button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Print Configuration -->
+    <div class="modal" id="modalPrintConfig">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Imprimer le Planning</h2>
+                <button class="btn-close" id="btnClosePrint">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Sélectionner la semaine</label>
+                    <select id="printWeekSelect">
+                        <!-- Populated by JS -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Format</label>
+                    <div style="display:flex; gap:10px;">
+                        <label style="font-weight:normal;"><input type="radio" name="printFormat" value="semaine" checked> Vue Semaine</label>
+                        <label style="font-weight:normal;"><input type="radio" name="printFormat" value="journee"> Vue Détaillée</label>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="btnCancelPrint">Annuler</button>
+                    <button class="btn btn-primary" id="btnConfirmPrint">🖨️ Imprimer</button>
                 </div>
             </div>
         </div>

@@ -2123,7 +2123,7 @@ body {
     border-top: 1px solid var(--color-border);
     display: flex;
 
-
+}
 /* ===================================
    Sync Controls & Dropdown
    =================================== */
@@ -2311,4 +2311,84 @@ body {
 
 .toast-message {
     flex: 1;
+}
+
+/* ===================================
+   Print Styles
+   =================================== */
+
+@media print {
+    @page {
+        size: landscape;
+        margin: 10mm;
+    }
+
+    body {
+        background: white;
+        font-size: 12px;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* Hide UI elements */
+    .header, 
+    .sidebar, 
+    .time-indicator, 
+    .modal, 
+    .sync-controls,
+    .view-toggle,
+    .btn,
+    .toast,
+    .overtime-separator { 
+        display: none !important;
+    }
+
+    /* Layout adjustments */
+    .main-content-v2 {
+        height: auto;
+        display: block;
+    }
+
+    .planning-area {
+        overflow: visible;
+        height: auto;
+    }
+
+    .planning-wrapper {
+        overflow: visible;
+        background: white;
+    }
+
+    /* Ensure colors are printed */
+    .operation-slot {
+        box-shadow: none;
+        border: 1px solid rgba(0,0,0,0.1);
+        page-break-inside: avoid;
+    }
+
+    /* Fix header display */
+    .app-title {
+        display: block !important;
+        position: static;
+        font-size: 24px;
+        margin-bottom: 10px;
+        text-align: center;
+    }
+    
+    /* Make sure headers are visible */
+    .journee-header, .semaine-header {
+        background: white;
+        border-bottom: 2px solid black;
+    }
+
+    /* Adjust sizing for paper */
+    .day-cell {
+        min-height: 800px; 
+        border: 1px solid #ccc;
+    }
+    
+    .vue-semaine, .vue-journee {
+        margin: 0;
+        box-shadow: none;
+    }
 }

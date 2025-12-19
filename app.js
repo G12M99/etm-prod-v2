@@ -980,20 +980,13 @@ function getPlacedOrders() {
  * Includes "En prépa" orders with at least one operation NOT placed
  */
 function getUnplacedOrders() {
-    return getActiveOrders().filter(cmd => {
-        const status = cmd.statut.toLowerCase().trim();
+    return commandes.filter(cmd => {
+        // If explicitly "Terminée" or "Livrée", ignore
+        if (cmd.statut === 'Terminée' || cmd.statut === 'Livrée') return false;
 
-        // Include "Non placée" orders
-        if (status === "non placée") {
-            return true;
-        }
-
-        // Include "En prépa" if at least one operation has NO slots
-        if (status === "en prépa") {
-            return cmd.operations.some(op => !op.slots || op.slots.length === 0);
-        }
-
-        return false;
+        // Otherwise, check if ANY operation is unplaced
+        // This covers 'Non placée', 'En cours', and even 'Planifiée' (if we want to be safe, though Planifiée usually means all placed)
+        return cmd.operations.some(op => !op.slots || op.slots.length === 0);
     });
 }
 
@@ -1066,12 +1059,37 @@ function getCapacityColorClass(pourcentage) {
  * @param {string} minTimeStr - Optional minimum start time (HH:MM)
  * @returns {string|null} Start time (HH:MM) or null if no gap found
  */
-function findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeStr = null) {
-    const placedOrders = getPlacedOrders();
-    const capaciteJour = HOURS_PER_DAY[jour];
+/**
+ * Helper: Calculate End Time accounting for Lunch Break (Mon-Thu 12:30-13:00)
+ */
+function calculateEndTimeWithLunch(startDec, duration, day) {
+    if (day === 'Vendredi') return startDec + duration;
 
-    // Get all slots for this machine/day/week
-    const slots = placedOrders
+    const lunchStart = 12.5;
+    const lunchEnd = 13.0;
+    
+    // If we start after lunch, no impact
+    if (startDec >= lunchStart) {
+        // But if we start strictly inside lunch (should be prevented by search logic, but for safety)
+        if (startDec < lunchEnd) return lunchEnd + duration;
+        return startDec + duration;
+    }
+
+    // We start before lunch. Check if we hit it.
+    const tentativeEnd = startDec + duration;
+    if (tentativeEnd > lunchStart) {
+        // We span lunch. Add the break duration (0.5) to the end.
+        return tentativeEnd + 0.5;
+    }
+
+    return tentativeEnd;
+}
+
+function findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeStr = null, allowOvertime = false) {
+    const placedOrders = getPlacedOrders();
+
+    // 1. Get Occupied Machine Slots
+    const machineSlots = placedOrders
         .flatMap(cmd => cmd.operations)
         .flatMap(op => op.slots)
         .filter(slot =>
@@ -1079,72 +1097,78 @@ function findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeSt
             slot.jour === jour &&
             slot.semaine === semaine
         )
-        .sort((a, b) => a.heureDebut.localeCompare(b.heureDebut));
+        .map(slot => ({
+            start: timeToDecimalHours(slot.heureDebut),
+            end: timeToDecimalHours(slot.heureFin)
+        }))
+        .sort((a, b) => a.start - b.start);
 
-    // Define time boundaries
-    // Mon-Thu: 07:30-16:30 (8.5h with lunch 12:30-13:00)
-    // Friday: 07:00-12:00 (5h)
-    const startHour = jour === 'Vendredi' ? 7 : 7.5;  // 07:00 or 07:30
-    const endHour = jour === 'Vendredi' ? 12 : 16.5;  // 12:00 or 16:30
-    const totalMinutes = (endHour - startHour) * 60;
-
-    // Create a timeline of busy periods (in minutes from start time)
-    const busyPeriods = slots.map(slot => {
-        const startParts = slot.heureDebut.split(':');
-        const endParts = slot.heureFin.split(':');
-        const slotStartHour = parseInt(startParts[0]) + parseInt(startParts[1]) / 60;
-        const slotEndHour = parseInt(endParts[0]) + parseInt(endParts[1]) / 60;
-        const startMinutes = (slotStartHour - startHour) * 60;
-        const endMinutes = (slotEndHour - startHour) * 60;
-        return { start: startMinutes, end: endMinutes };
-    });
-
-    // Add lunch break for Mon-Thu
-    if (jour !== 'Vendredi') {
-        const lunchStartParts = LUNCH_BREAK.start.split(':');
-        const lunchEndParts = LUNCH_BREAK.end.split(':');
-        const lunchStartHour = parseInt(lunchStartParts[0]) + parseInt(lunchStartParts[1]) / 60;
-        const lunchEndHour = parseInt(lunchEndParts[0]) + parseInt(lunchEndParts[1]) / 60;
-        const lunchStart = (lunchStartHour - startHour) * 60;
-        const lunchEnd = (lunchEndHour - startHour) * 60;
-        busyPeriods.push({ start: lunchStart, end: lunchEnd });
-        busyPeriods.sort((a, b) => a.start - b.start);
+    // 2. Define Day Boundaries
+    const dayStart = jour === 'Vendredi' ? 7 : 7.5;
+    let dayEnd;
+    if (jour === 'Vendredi') {
+        dayEnd = allowOvertime ? 14 : 12;
+    } else {
+        dayEnd = allowOvertime ? 18 : 16.5;
     }
 
-    // Find first gap that fits the duration
-    const durationMinutes = durationNeeded * 60;
-    let currentTime = 0; // Start at beginning of work day
-
-    // If a minimum start time is provided, adjust initial currentTime
+    // 3. Determine Search Start
+    let currentSearch = dayStart;
     if (minTimeStr) {
-        const minParts = minTimeStr.split(':');
-        const minHourDecimal = parseInt(minParts[0]) + parseInt(minParts[1]) / 60;
-        const startOffset = (minHourDecimal - startHour) * 60;
-        currentTime = Math.max(0, startOffset);
+        const parts = minTimeStr.split(':');
+        currentSearch = Math.max(currentSearch, parseInt(parts[0]) + parseInt(parts[1]) / 60);
     }
 
-    for (const busy of busyPeriods) {
-        const gapSize = busy.start - currentTime;
-        if (gapSize >= durationMinutes) {
-            // Found a gap! Convert back to HH:MM
-            const gapStartDecimal = startHour + currentTime / 60;
-            const gapStartHour = Math.floor(gapStartDecimal);
-            const gapStartMinute = Math.round((gapStartDecimal - gapStartHour) * 60);
-            return `${gapStartHour.toString().padStart(2, '0')}:${gapStartMinute.toString().padStart(2, '0')}`;
+    const lunchStart = 12.5;
+    const lunchEnd = 13.0;
+
+    // 4. Iterate to find a slot
+    // We treat machineSlots as obstacles. We jump over them.
+    
+    // Optimization: Merge contiguous machine slots to simplify jumping
+    // (Optional but good for performance)
+
+    while (currentSearch + durationNeeded <= dayEnd + 0.001) { // 0.001 epsilon
+        
+        // A. Handle Lunch Constraint for Start Time
+        if (jour !== 'Vendredi') {
+            // Cannot start INSIDE lunch
+            if (currentSearch > lunchStart && currentSearch < lunchEnd) {
+                currentSearch = lunchEnd;
+            }
+            // Check "Small Op" Rule: If < 30min and hits lunch, push to after lunch
+            if (durationNeeded < 0.5 && currentSearch < lunchStart && (currentSearch + durationNeeded > lunchStart)) {
+                currentSearch = lunchEnd;
+            }
         }
-        currentTime = Math.max(currentTime, busy.end);
+
+        // B. Calculate Required End Time (including lunch span if needed)
+        const requiredEnd = calculateEndTimeWithLunch(currentSearch, durationNeeded, jour);
+
+        // C. Check Day Limit
+        if (requiredEnd > dayEnd + 0.001) {
+            return null; // Won't fit in the day
+        }
+
+        // D. Check Collision with Machine Slots
+        // We check if the interval [currentSearch, requiredEnd] overlaps with any slot
+        // Note: Slot Ends are exclusive? Usually yes.
+        // Overlap: (StartA < EndB) and (EndA > StartB)
+        
+        const collisionSlot = machineSlots.find(slot => 
+            currentSearch < slot.end - 0.001 && requiredEnd > slot.start + 0.001
+        );
+
+        if (collisionSlot) {
+            // Collides! Jump to the end of this obstacle and retry
+            currentSearch = Math.max(currentSearch, collisionSlot.end);
+        } else {
+            // No collision -> Found it!
+            return formatDecimalTime(currentSearch);
+        }
     }
 
-    // Check gap at the end
-    const remainingMinutes = totalMinutes - currentTime;
-    if (remainingMinutes >= durationMinutes) {
-        const gapStartDecimal = startHour + currentTime / 60;
-        const gapStartHour = Math.floor(gapStartDecimal);
-        const gapStartMinute = Math.round((gapStartDecimal - gapStartHour) * 60);
-        return `${gapStartHour.toString().padStart(2, '0')}:${gapStartMinute.toString().padStart(2, '0')}`;
-    }
-
-    return null; // No gap found
+    return null;
 }
 
 /**
@@ -1351,36 +1375,63 @@ function findBestMachineSlot(operation, cmd, machinesList, durationNeeded = null
                     }
                 }
 
-                // Find NEXT available gap (any size)
-                const gap = findNextGap(machine, day, week, minTimeStr);
+                // LOOP: Search for ANY valid gap in this day
+                let currentSearchTimeStr = minTimeStr;
+                
+                while (true) {
+                    // Find NEXT available gap (any size > 1min) starting from currentSearchTimeStr
+                    const gap = findNextGap(machine, day, week, currentSearchTimeStr);
 
-                if (!gap) continue;
+                    if (!gap) break; // No more gaps this day -> Next machine
 
-                // Validate chronological order (Strict check)
-                const validation = canPlaceOperation(cmd, operation, week, day, gap.startTime);
-                if (!validation.valid) {
-                    rejectedCount++;
-                    continue;
+                    // Calculate Gap End Time for next iteration
+                    const startH = parseInt(gap.startTime.split(':')[0]);
+                    const startM = parseInt(gap.startTime.split(':')[1]);
+                    const startDec = startH + startM / 60;
+                    const endDec = startDec + gap.duration;
+                    const endH = Math.floor(endDec);
+                    const endM = Math.round((endDec - endH) * 60);
+                    const gapEndTimeStr = `${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')}`;
+
+                    // Validate chronological order (Strict check)
+                    const validation = canPlaceOperation(cmd, operation, week, day, gap.startTime);
+                    if (!validation.valid) {
+                        rejectedCount++;
+                        // Try next gap in same day starting after this one
+                        currentSearchTimeStr = gapEndTimeStr;
+                        continue;
+                    }
+
+                    // Determine how much we can place
+                    const usableDuration = Math.min(gap.duration, durationNeeded);
+
+                    // Skip tiny gaps UNLESS the operation itself is tiny
+                    // If operation is 10min (0.16h), we accept a 0.16h gap.
+                    // If operation is 2h, we reject < 15min gaps to avoid fragmentation?
+                    // Let's use a soft limit: min 15min OR the full remaining duration if it's small.
+                    if (usableDuration < 0.25 && durationNeeded > 0.25) {
+                        // Gap too small for a chunk -> Try next gap
+                        currentSearchTimeStr = gapEndTimeStr;
+                        continue;
+                    }
+
+                    // Calculate machine load score
+                    const machineCapacity = calculerCapaciteMachine(machine, week);
+                    const loadScore = machineCapacity.heuresUtilisees / TOTAL_HOURS_PER_WEEK;
+
+                    candidates.push({
+                        machine: machine,
+                        week: week,
+                        day: day,
+                        startTime: gap.startTime,
+                        usableDuration: usableDuration,
+                        loadScore: loadScore,
+                        weekPriority: week
+                    });
+                    
+                    // Found a candidate for this machine/day -> Stop searching this machine (Load balancing handles machine selection)
+                    break; 
                 }
-
-                // Determine how much we can place
-                const usableDuration = Math.min(gap.duration, durationNeeded);
-
-                if (usableDuration < 0.25) continue; // Skip tiny gaps (< 15 mins) unless needed?
-
-                // Calculate machine load score
-                const machineCapacity = calculerCapaciteMachine(machine, week);
-                const loadScore = machineCapacity.heuresUtilisees / TOTAL_HOURS_PER_WEEK;
-
-                candidates.push({
-                    machine: machine,
-                    week: week,
-                    day: day,
-                    startTime: gap.startTime,
-                    usableDuration: usableDuration,
-                    loadScore: loadScore,
-                    weekPriority: week
-                });
             }
         }
     }
@@ -2108,6 +2159,141 @@ function renderCommandesNonPlacees() {
     }
 }
 
+/**
+ * Cascade Reschedule: Automatically moves subsequent operations if chronological order is broken
+ */
+function replanifierOperationsSuivantes(cmd, modifiedOp) {
+    const priority = ['Cisaillage', 'Poinçonnage', 'Pliage'];
+    const startIdx = priority.indexOf(modifiedOp.type);
+    
+    if (startIdx === -1 || startIdx === priority.length - 1) return; // Last op or unknown
+
+    let previousOp = modifiedOp;
+
+    // Iterate through subsequent operations
+    for (let i = startIdx + 1; i < priority.length; i++) {
+        const currentType = priority[i];
+        const currentOp = cmd.operations.find(o => o.type === currentType);
+        
+        // Skip if not present or not placed
+        if (!currentOp || !currentOp.slots || currentOp.slots.length === 0) {
+            previousOp = currentOp || previousOp; // Update ref if exists
+            continue;
+        }
+
+        // 1. Get End Time of Previous Op (The Constraint)
+        // We need the absolute latest end time across all slots of the previous op
+        const prevSlots = [...previousOp.slots];
+        if (prevSlots.length === 0) continue; // Should not happen if logic flows correctly
+        
+        prevSlots.sort((a,b) => {
+            if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+            const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+            if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+            return a.heureFin.localeCompare(b.heureFin);
+        });
+        const lastPrevSlot = prevSlots[prevSlots.length - 1];
+
+        // 2. Get Start Time of Current Op
+        // We need the absolute earliest start time
+        const currentSlots = [...currentOp.slots];
+        currentSlots.sort((a,b) => {
+            if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+            const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+            if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+            return a.heureDebut.localeCompare(b.heureDebut);
+        });
+        const firstCurrentSlot = currentSlots[0];
+
+        // 3. Check Conflict
+        let isConflict = false;
+        const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+        
+        if (lastPrevSlot.semaine > firstCurrentSlot.semaine) isConflict = true;
+        else if (lastPrevSlot.semaine === firstCurrentSlot.semaine) {
+            const prevDayIdx = days.indexOf(lastPrevSlot.jour);
+            const currDayIdx = days.indexOf(firstCurrentSlot.jour);
+            
+            if (prevDayIdx > currDayIdx) isConflict = true;
+            else if (prevDayIdx === currDayIdx) {
+                // Compare times
+                const prevEndParts = lastPrevSlot.heureFin.split(':');
+                const currStartParts = firstCurrentSlot.heureDebut.split(':');
+                const prevEndDec = parseInt(prevEndParts[0]) + parseInt(prevEndParts[1])/60;
+                const currStartDec = parseInt(currStartParts[0]) + parseInt(currStartParts[1])/60;
+                
+                if (prevEndDec > currStartDec) isConflict = true;
+            }
+        }
+
+        // 4. Resolve Conflict: Replan
+        if (isConflict) {
+            console.log(`🔄 Cascade: Décalage nécessaire pour ${currentType} (Conflit avec ${previousOp.type})`);
+            
+            // Unplan completely
+            currentOp.slots = [];
+            currentOp.statut = "Non placée";
+
+            // Define constraint for new search
+            const constraint = {
+                week: lastPrevSlot.semaine,
+                dayIndex: days.indexOf(lastPrevSlot.jour),
+                timeStr: lastPrevSlot.heureFin
+            };
+
+            // Get available machines
+            let machines = [];
+            if (currentType === 'Cisaillage') machines = MACHINES.cisailles;
+            else if (currentType === 'Poinçonnage') machines = MACHINES.poinconneuses;
+            else if (currentType === 'Pliage') machines = MACHINES.plieuses;
+
+            // Auto-place logic (similar to placerAutomatiquement)
+            let remainingDuration = currentOp.dureeTotal;
+            
+            while (remainingDuration > 0.01) {
+                const bestSlot = findBestMachineSlot(currentOp, cmd, machines, remainingDuration, constraint);
+                
+                if (!bestSlot) {
+                    Toast.warning(`⚠️ Impossible de replacer ${currentType} automatiquement.`);
+                    break;
+                }
+
+                const placedDuration = bestSlot.usableDuration;
+                
+                // Calculate Times
+                const startParts = bestSlot.startTime.split(':');
+                const startDec = parseInt(startParts[0]) + parseInt(startParts[1])/60;
+                const endDec = startDec + placedDuration;
+                const endH = Math.floor(endDec);
+                const endM = Math.round((endDec - endH) * 60);
+                const endTime = `${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')}`;
+                
+                // Add slot
+                currentOp.slots.push({
+                    machine: bestSlot.machine,
+                    duree: placedDuration,
+                    semaine: bestSlot.week,
+                    jour: bestSlot.day,
+                    heureDebut: bestSlot.startTime,
+                    heureFin: endTime,
+                    dateDebut: getDateFromWeekDay(bestSlot.week, bestSlot.day, bestSlot.startTime).toISOString(),
+                    dateFin: getDateFromWeekDay(bestSlot.week, bestSlot.day, endTime).toISOString()
+                });
+
+                remainingDuration -= placedDuration;
+            }
+
+            if (currentOp.slots.length > 0) {
+                currentOp.statut = "Planifiée";
+                Toast.info(`Décalage auto : ${currentType}`);
+            }
+        }
+
+        // Update previousOp for next iteration (chain reaction)
+        previousOp = currentOp;
+    }
+}
+
 // ===================================
 // Drag and Drop
 // ===================================
@@ -2321,36 +2507,89 @@ function handleDrop(e) {
     const operation = cmd.operations.find(op => op.type === draggedOperation.operationType);
     if (!operation) return;
 
+    // CHECK MACHINE COMPATIBILITY
+    if (targetMachine) {
+        let validMachines = [];
+        if (operation.type === 'Cisaillage') validMachines = MACHINES.cisailles;
+        else if (operation.type === 'Poinçonnage') validMachines = MACHINES.poinconneuses;
+        else if (operation.type === 'Pliage') validMachines = MACHINES.plieuses;
+        
+        if (!validMachines.includes(targetMachine)) {
+             // Need to define restoreAndAlert helper or inline alert if not hoisted yet
+             // Since restoreAndAlert is defined at bottom of this function scope, we can't call it before definition if not hoisted?
+             // Actually functions declarations are hoisted. But let's check.
+             // Wait, restoreAndAlert relies on originalSlots which is defined below.
+             // I should move this check AFTER step 2 (Backup).
+        }
+    }
+
     // 2. Backup current state (in case of failure)
     const originalSlots = JSON.parse(JSON.stringify(operation.slots));
     const originalStatut = operation.statut;
 
-    // 3. Temporarily remove the slot being dragged to avoid self-collision
-    if (!draggedOperation.fromSidebar) {
-        operation.slots = []; 
+    // CHECK MACHINE COMPATIBILITY (Moved here to safely use restoreAndAlert)
+    if (targetMachine) {
+        let validMachines = [];
+        if (operation.type === 'Cisaillage') validMachines = MACHINES.cisailles;
+        else if (operation.type === 'Poinçonnage') validMachines = MACHINES.poinconneuses;
+        else if (operation.type === 'Pliage') validMachines = MACHINES.plieuses;
+        
+        if (!validMachines.includes(targetMachine)) {
+             restoreAndAlert(`Impossible : ${operation.type} ne peut pas être réalisé sur ${targetMachine}.`);
+             return;
+        }
     }
 
-    // 4. Calculate Search Start Time
+    // 3. Strategy Selection: Merge vs Split
+    // Check if we can fit the WHOLE operation (merge) at the target, 
+    // or if we must only move the specific chunk (split).
+    
+    let durationToPlace = operation.dureeTotal;
+    let mergeMode = false;
+
+    // 4. Calculate Search Start Time (Common for both strategies)
     // A. User Drop Time
     let dropDecimal = 7.5; // Default morning
     if (targetHour) {
         dropDecimal = parseFloat(targetHour);
     }
     if (targetTime) {
-        // Refine with minutes if available
         const parts = targetTime.split(':');
         dropDecimal = parseInt(parts[0]) + parseInt(parts[1]) / 60;
     }
 
-    // B. Chronology Constraint (Previous Operation End)
-    let chronologyMinDecimal = 0;
+    // A2. Enforce "Not Before Now" (Auto-correct Past Drops)
+    const now = new Date();
+    const currentWeekNum = getWeekNumber(now);
+    const dayMap = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+    const currentDayName = dayMap[now.getDay()];
+    const daysOrder = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
     
-    // Find previous operation
+    let searchWeek = targetWeek;
+    let searchDay = targetDay;
+    
+    const targetDayIdx = daysOrder.indexOf(targetDay);
+    const currentDayIdx = daysOrder.indexOf(currentDayName);
+    
+    const isPastDay = searchWeek < currentWeekNum || (searchWeek === currentWeekNum && targetDayIdx < currentDayIdx);
+    
+    if (isPastDay) {
+        searchWeek = currentWeekNum;
+        searchDay = currentDayName;
+    }
+
+    if (!DAYS_OF_WEEK.includes(searchDay)) {
+        searchWeek = searchWeek + 1;
+        searchDay = 'Lundi';
+        dropDecimal = 7.5;
+    }
+
+    // B. Chronology Constraint
+    let chronologyMinDecimal = 0;
     const opIndex = cmd.operations.indexOf(operation);
     if (opIndex > 0) {
         const prevOp = cmd.operations[opIndex - 1];
         if (prevOp.slots && prevOp.slots.length > 0) {
-            // Find the latest end time of the previous op
             const lastSlot = [...prevOp.slots].sort((a,b) => {
                 if (a.semaine !== b.semaine) return a.semaine - b.semaine;
                 const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
@@ -2358,18 +2597,18 @@ function handleDrop(e) {
                 return a.heureFin.localeCompare(b.heureFin);
             }).pop();
 
-            if (lastSlot.semaine > targetWeek) {
+            if (lastSlot.semaine > searchWeek) {
                 restoreAndAlert("Impossible : L'opération précédente termine une semaine plus tard.");
                 return;
-            } else if (lastSlot.semaine === targetWeek) {
+            } else if (lastSlot.semaine === searchWeek) {
                 const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
                 const prevDayIdx = days.indexOf(lastSlot.jour);
-                const targetDayIdx = days.indexOf(targetDay);
+                const currentSearchDayIdx = days.indexOf(searchDay);
                 
-                if (prevDayIdx > targetDayIdx) {
+                if (prevDayIdx > currentSearchDayIdx) {
                      restoreAndAlert("Impossible : L'opération précédente termine un jour plus tard.");
                      return;
-                } else if (prevDayIdx === targetDayIdx) {
+                } else if (prevDayIdx === currentSearchDayIdx) {
                     const endParts = lastSlot.heureFin.split(':');
                     chronologyMinDecimal = parseInt(endParts[0]) + parseInt(endParts[1]) / 60;
                 }
@@ -2377,36 +2616,107 @@ function handleDrop(e) {
         }
     }
 
-    // C. Effective Search Start
     const effectiveSearchStart = Math.max(dropDecimal, chronologyMinDecimal);
     const effectiveSearchTimeStr = formatDecimalTime(effectiveSearchStart);
 
-    // 5. Find Gap
-    const gapStart = findFirstAvailableGap(targetMachine, targetDay, targetWeek, operation.dureeTotal, effectiveSearchTimeStr);
+    // TEST 1: Try to fit TOTAL duration (Merge Strategy)
+    // We must temporarily assume slots are empty to check feasibility properly
+    // But we can't clear them yet. findFirstAvailableGap checks `placedOrders`.
+    // We can simulate it by passing the current operation as one to ignore? 
+    // No, `findFirstAvailableGap` reads from global. 
+    // Hack: filter out current op slots in `findFirstAvailableGap`? No, complex.
+    // Better: Temporarily clear slots, check, restore if fail.
+    
+    const slotsBackup = [...operation.slots];
+    operation.slots = []; // Clear all for test
+
+    const gapForTotal = findFirstAvailableGap(targetMachine, searchDay, searchWeek, operation.dureeTotal, effectiveSearchTimeStr, true);
+    
+    // Check if the gap found is actually AT the drop target (approx)
+    // If we drop at 10:00 and it finds a gap at 14:00, that's not what the user wants if 10:00 was free for small chunk.
+    // But `effectiveSearchTimeStr` forces search start.
+    // If gapForTotal starts exactly at effectiveSearchTimeStr (or very close), we use it.
+    
+    let useTotal = false;
+    if (gapForTotal) {
+        const gapStartParts = gapForTotal.split(':');
+        const gapStartDec = parseInt(gapStartParts[0]) + parseInt(gapStartParts[1])/60;
+        
+        // If the gap starts roughly where we asked (tolerance 0.1h)
+        if (Math.abs(gapStartDec - effectiveSearchStart) < 0.1) {
+            useTotal = true;
+        }
+    }
+
+    if (useTotal) {
+        // MERGE SUCCESS
+        durationToPlace = operation.dureeTotal;
+        // Slots already cleared above
+        mergeMode = true;
+    } else {
+        // MERGE FAILED -> FALLBACK TO SPLIT (Single Slot)
+        operation.slots = slotsBackup; // Restore first
+        
+        if (!draggedOperation.fromSidebar) {
+            const slotIndex = operation.slots.findIndex(s => {
+                const sId = `${s.semaine}_${s.jour}_${s.heureDebut}`;
+                return sId === draggedOperation.slotId;
+            });
+
+            if (slotIndex !== -1) {
+                durationToPlace = operation.slots[slotIndex].duree;
+                operation.slots.splice(slotIndex, 1); // Remove only this one
+            } else {
+                 operation.slots = []; // Fallback
+            }
+        } else {
+             if (draggedOperation.duration) durationToPlace = draggedOperation.duration;
+        }
+    }
+
+    // 5. Find Gap (Final Search)
+    const gapStart = findFirstAvailableGap(targetMachine, searchDay, searchWeek, durationToPlace, effectiveSearchTimeStr, true);
 
     if (gapStart) {
-        // Gap found! Calculate end time
+        // Gap found! Calculate end time using Lunch logic
         const startParts = gapStart.split(':');
         const startDec = parseInt(startParts[0]) + parseInt(startParts[1])/60;
-        const endDec = startDec + operation.dureeTotal;
+        
+        const endDec = calculateEndTimeWithLunch(startDec, durationToPlace, searchDay);
         const endTimeStr = formatDecimalTime(endDec);
+
+        // Check for Overtime
+        const standardEnd = searchDay === 'Vendredi' ? 12.0 : 16.5;
+        let isOvertime = false;
+
+        if (endDec > standardEnd + 0.001) { // Epsilon for float
+            if (!confirm(`⚠️ HEURES SUPPLÉMENTAIRES\n\nL'opération se terminera à ${endTimeStr}, ce qui dépasse l'horaire standard (${formatDecimalTime(standardEnd)}).\n\nConfirmer le placement en heures sup ?`)) {
+                restoreAndAlert("Placement annulé par l'utilisateur.");
+                return;
+            }
+            isOvertime = true;
+        }
 
         // 6. Apply New Slot
         operation.slots.push({
             machine: targetMachine,
-            duree: operation.dureeTotal,
-            semaine: targetWeek,
-            jour: targetDay,
+            duree: durationToPlace,
+            semaine: searchWeek,
+            jour: searchDay,
             heureDebut: gapStart,
             heureFin: endTimeStr,
-            dateDebut: getDateFromWeekDay(targetWeek, targetDay, gapStart).toISOString(),
-            dateFin: getDateFromWeekDay(targetWeek, targetDay, endTimeStr).toISOString()
+            dateDebut: getDateFromWeekDay(searchWeek, searchDay, gapStart).toISOString(),
+            dateFin: getDateFromWeekDay(searchWeek, searchDay, endTimeStr).toISOString(),
+            overtime: isOvertime
         });
         operation.statut = "Planifiée";
         
         // Update main status
         if (cmd.operations.every(o => o.slots.length > 0)) cmd.statut = "Planifiée";
         else cmd.statut = "En cours";
+
+        // 🔄 Cascade Reschedule (Fix Conflicts)
+        replanifierOperationsSuivantes(cmd, operation);
 
         historyManager.saveState(`Move ${operation.type} ${cmd.id}`);
         syncManager.saveLocalData();
@@ -2547,7 +2857,7 @@ function placerAutomatiquement(commandeId) {
     const allPlaced = cmd.operations.every(op => op.slots.length > 0);
     if (allPlaced) {
         cmd.statut = "Planifiée";
-        alert(`✅ Commande ${commandeId} placée automatiquement avec répartition optimale !`);
+        Toast.success(`Commande ${commandeId} placée avec succès`);
     } else {
         alert(`⚠️ Commande ${commandeId} partiellement placée. Certaines opérations n'ont pas pu être placées.`);
     }
@@ -4014,6 +4324,10 @@ function selectScenario(id) {
 // ------------------------------------------------------------------
 
 document.getElementById('btnInsertUrgent')?.addEventListener('click', showUrgentInsertionModal);
+
+document.getElementById('btnCloseUrgent')?.addEventListener('click', () => {
+    document.getElementById('modalUrgentInsertion').classList.remove('active');
+});
 
 document.getElementById('btnCancelUrgent')?.addEventListener('click', () => {
     document.getElementById('modalUrgentInsertion').classList.remove('active');

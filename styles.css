@@ -1048,6 +1048,29 @@ body {
     cursor: grabbing;
 }
 
+/* Search highlight styles */
+.operation-slot.search-highlight {
+    animation: pulse-highlight 1.5s ease-in-out infinite;
+    box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.6), 0 4px 8px rgba(0, 0, 0, 0.3) !important;
+    border: 2px solid #ffd700 !important;
+    z-index: 50 !important;
+    transform: scale(1.02);
+}
+
+.operation-slot.search-dimmed {
+    opacity: 0.3;
+    filter: grayscale(50%);
+}
+
+@keyframes pulse-highlight {
+    0%, 100% {
+        box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.6), 0 4px 8px rgba(0, 0, 0, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 0 6px rgba(255, 215, 0, 0.8), 0 6px 12px rgba(255, 215, 0, 0.4);
+    }
+}
+
 .operation-slot .slot-time {
     font-weight: bold;
     font-size: 10px;

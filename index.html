@@ -66,7 +66,12 @@
                                                     </button>
                                                 </div>
                                             </div>
-                                        </div>        </div>
+                                        </div>
+                
+                <button class="btn btn-warning" id="btnSystemEvents" style="margin-left: 10px; background-color: #ffc107; border-color: #ffc107; color: #000; font-weight: 500;">
+                     Maintenance / Fermeture
+                </button>
+            </div>
     </div>
 </header>
 
@@ -282,6 +287,81 @@
                 <div class="modal-actions">
                     <button class="btn btn-secondary" id="btnCancelPrint">Annuler</button>
                     <button class="btn btn-primary" id="btnConfirmPrint">🖨️ Imprimer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: System Events (Maintenance/Closures) -->
+    <div class="modal" id="modalSystemEvents">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Gestion Fermetures & Maintenance</h2>
+                <button class="btn-close" id="btnCloseSystemEvents">&times;</button>
+            </div>
+            <div class="modal-body">
+                
+                <!-- Formulaire -->
+                <div class="system-event-form" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 25px; border: 1px solid #dee2e6;">
+                    <h3 style="margin-top: 0; font-size: 1.1em; color: #495057; margin-bottom: 15px; border-bottom: 1px solid #ddd; padding-bottom: 10px;">Ajouter une période de blocage</h3>
+                    
+                    <div class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div class="form-group">
+                            <label>Type</label>
+                            <select id="sysEventType" class="form-control" onchange="window.toggleMachineSelect()">
+                                <option value="maintenance">Maintenance Machine</option>
+                                <option value="fermeture">Fermeture Totale (Usine)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="sysMachineGroup">
+                            <label>Machine</label>
+                            <select id="sysMachine" class="form-control">
+                                <!-- Populated by JS -->
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Date de Début</label>
+                            <input type="date" id="sysDateStart" class="form-control">
+                        </div>
+                        <div class="form-group">
+                            <label>Date de Fin (inclus)</label>
+                            <input type="date" id="sysDateEnd" class="form-control">
+                        </div>
+                        <div class="form-group">
+                            <label>Heure Début</label>
+                            <input type="time" id="sysStart" class="form-control" value="07:30">
+                        </div>
+                        <div class="form-group">
+                            <label>Heure Fin</label>
+                            <input type="time" id="sysEnd" class="form-control" value="16:30">
+                        </div>
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label>Raison (Optionnel)</label>
+                            <input type="text" id="sysReason" class="form-control" placeholder="Maintenance préventive, Jour férié...">
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px; text-align: right;">
+                        <button class="btn btn-primary" id="btnAddSystemEvent">Ajouter le blocage</button>
+                    </div>
+                </div>
+
+                <!-- Liste -->
+                <h3 style="font-size: 1.1em; color: #495057; margin-bottom: 15px;">Blocages actifs</h3>
+                <div class="table-responsive">
+                    <table class="commands-table" style="width: 100%;">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Cible</th>
+                                <th>Période</th>
+                                <th>Raison</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="systemEventsList">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>

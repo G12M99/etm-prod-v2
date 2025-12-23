@@ -4793,6 +4793,43 @@ function formatTimeRange(start, end) {
     return `${h1.toString().padStart(2,'0')}:${m1.toString().padStart(2,'0')}-${h2.toString().padStart(2,'0')}:${m2.toString().padStart(2,'0')}`;
 }
 
+// ===================================================================
+// SMART SCENARIO - CONSTANTS & CONFIGURATION
+// ===================================================================
+
+const SCHEDULE_CONFIG = {
+    MONDAY_TO_THURSDAY: {
+        start: 7.5,          // 07:30
+        standardEnd: 16.5,   // 16:30
+        overtimeEnd: 18.0,   // 18:00
+        lunchStart: 12.5,    // 12:30
+        lunchEnd: 13.0       // 13:00
+    },
+    FRIDAY: {
+        start: 7.0,          // 07:00
+        standardEnd: 12.0,   // 12:00
+        overtimeEnd: 14.0,   // 14:00
+        lunchStart: null,    // Pas de pause le vendredi
+        lunchEnd: null
+    },
+    CR_THRESHOLD: 1.05,       // Critical Ratio minimum après déplacement
+    CR_FORCE_THRESHOLD: 0.95, // En mode FORCE, on accepte jusqu'à 0.95
+    MAX_DISPLACEMENTS_NORMAL: 5,
+    MAX_DISPLACEMENTS_FORCE: 20,
+    FRAGMENTATION_THRESHOLD: 3.0, // Fragmenter les opérations > 3h
+    SEARCH_HORIZON_DAYS: 14
+};
+
+/**
+ * Get schedule config for a specific day
+ */
+function getScheduleForDay(dayName) {
+    if (dayName === 'Vendredi') {
+        return SCHEDULE_CONFIG.FRIDAY;
+    }
+    return SCHEDULE_CONFIG.MONDAY_TO_THURSDAY;
+}
+
 /**
  * Calculate Displaceability Score for an operation
  * Plus le score est élevé, plus l'opération peut être déplacée
@@ -4839,11 +4876,178 @@ function calculateDisplaceabilityScore(operation, commandeData, currentDate) {
 }
 
 /**
- * Calculate Smart Insertion Plan (Scenario SMART)
+ * Find next available slot for displacement with robust gap finding
+ * Returns: { week, year, day, startHour, endHour, isOvertime } or null
+ */
+function findNextAvailableSlotForDisplacement(machine, duration, startDay, startWeek, startYear, minHour, allowOvertime = true) {
+    console.log(`[GAP_FINDER] Searching slot: machine=${machine}, duration=${duration}h, from ${startDay} week ${startWeek}, minHour=${minHour}, overtime=${allowOvertime}`);
+
+    const searchHorizonDays = SCHEDULE_CONFIG.SEARCH_HORIZON_DAYS;
+    let searchDate = getDateFromWeekAndDay(startWeek, startYear, startDay);
+    searchDate.setHours(Math.floor(minHour), Math.round((minHour - Math.floor(minHour)) * 60), 0, 0);
+
+    const now = new Date();
+
+    for (let dayOffset = 0; dayOffset < searchHorizonDays; dayOffset++) {
+        const weekNum = getWeekNumber(searchDate);
+        const yearNum = getISOWeekYear(searchDate);
+        const dayIdx = searchDate.getDay() - 1; // 0=Lun
+
+        if (dayIdx < 0 || dayIdx > 4) {
+            searchDate.setDate(searchDate.getDate() + 1);
+            continue; // Skip weekend
+        }
+
+        const dayName = DAYS_OF_WEEK[dayIdx];
+        const schedule = getScheduleForDay(dayName);
+
+        // Déterminer les bornes de recherche
+        const isToday = searchDate.toDateString() === now.toDateString();
+        const currentHourDecimal = now.getHours() + now.getMinutes() / 60;
+        const searchStartHour = (dayOffset === 0) ?
+            Math.max(schedule.start, minHour, isToday ? currentHourDecimal : 0) :
+            schedule.start;
+
+        const searchEndHour = allowOvertime ? schedule.overtimeEnd : schedule.standardEnd;
+
+        // Récupérer tous les créneaux occupés
+        const busySlots = [];
+        const placedOrders = getPlacedOrders();
+
+        placedOrders.forEach(cmd => {
+            cmd.operations.forEach(op => {
+                if (!op.slots) return;
+                op.slots.forEach(slot => {
+                    if (slot.machine !== machine || slot.jour !== dayName) return;
+                    if (slot.semaine !== weekNum) return;
+                    if (slot.annee && slot.annee !== yearNum) return;
+
+                    busySlots.push({
+                        start: timeToDecimalHours(slot.heureDebut),
+                        end: timeToDecimalHours(slot.heureFin),
+                        type: 'operation'
+                    });
+                });
+            });
+        });
+
+        // Ajouter les systemEvents
+        systemEvents
+            .filter(e => (e.machine === machine || e.machine === 'ALL') &&
+                         e.day === dayName &&
+                         e.week === weekNum &&
+                         (!e.year || e.year === yearNum))
+            .forEach(e => {
+                busySlots.push({
+                    start: timeToDecimalHours(e.startTime),
+                    end: timeToDecimalHours(e.endTime),
+                    type: 'system'
+                });
+            });
+
+        // Ajouter la pause déjeuner si applicable
+        if (schedule.lunchStart !== null) {
+            busySlots.push({
+                start: schedule.lunchStart,
+                end: schedule.lunchEnd,
+                type: 'lunch'
+            });
+        }
+
+        // Trier les créneaux occupés
+        busySlots.sort((a, b) => a.start - b.start);
+
+        // Chercher des gaps
+        let currentPointer = searchStartHour;
+
+        for (const busy of busySlots) {
+            if (currentPointer < busy.start) {
+                const gapSize = busy.start - currentPointer;
+
+                // Vérifier si l'opération tient dans ce gap
+                if (gapSize >= duration - 0.001) {
+                    const endHour = currentPointer + duration;
+
+                    // Vérifier qu'on ne dépasse pas la fin de journée
+                    if (endHour <= searchEndHour + 0.001) {
+                        const isOvertime = endHour > schedule.standardEnd;
+
+                        console.log(`[GAP_FINDER] ✓ Found slot: ${dayName} ${decimalToTimeString(currentPointer)}-${decimalToTimeString(endHour)} (overtime=${isOvertime})`);
+
+                        return {
+                            machine: machine,
+                            week: weekNum,
+                            year: yearNum,
+                            day: dayName,
+                            startHour: currentPointer,
+                            endHour: endHour,
+                            isOvertime: isOvertime
+                        };
+                    }
+                }
+            }
+            currentPointer = Math.max(currentPointer, busy.end);
+        }
+
+        // Vérifier le dernier gap (après la dernière occupation jusqu'à la fin de journée)
+        if (currentPointer + duration <= searchEndHour + 0.001) {
+            const endHour = currentPointer + duration;
+            const isOvertime = endHour > schedule.standardEnd;
+
+            console.log(`[GAP_FINDER] ✓ Found slot (end of day): ${dayName} ${decimalToTimeString(currentPointer)}-${decimalToTimeString(endHour)} (overtime=${isOvertime})`);
+
+            return {
+                machine: machine,
+                week: weekNum,
+                year: yearNum,
+                day: dayName,
+                startHour: currentPointer,
+                endHour: endHour,
+                isOvertime: isOvertime
+            };
+        }
+
+        // Passer au jour suivant
+        searchDate.setDate(searchDate.getDate() + 1);
+    }
+
+    console.log(`[GAP_FINDER] ✗ No slot found after ${searchHorizonDays} days`);
+    return null;
+}
+
+/**
+ * Helper: Get Date from week number, year and day name
+ */
+function getDateFromWeekAndDay(weekNum, year, dayName) {
+    const simple = new Date(year, 0, 1 + (weekNum - 1) * 7);
+    const dow = simple.getDay();
+    const ISOweekStart = new Date(simple);
+    if (dow <= 4) ISOweekStart.setDate(simple.getDate() - simple.getDay() + 1);
+    else ISOweekStart.setDate(simple.getDate() + 8 - simple.getDay());
+
+    const dayIndex = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi"].indexOf(dayName);
+    const targetDate = new Date(ISOweekStart);
+    targetDate.setDate(ISOweekStart.getDate() + dayIndex);
+
+    return targetDate;
+}
+
+/**
+ * Calculate Smart Insertion Plan (Scenario SMART) - REFACTORED
  * Stratégie : Déplacement intelligent des opérations existantes
  */
+/**
+ * Calculate Smart Insertion Plan (Scenario SMART) - V2 avec ordre des opérations
+ *
+ * Logique métier :
+ * 1. Cisaillage → Poinçonnage → Pliage (ordre strict)
+ * 2. Chaque opération commence juste après la fin de la précédente
+ * 3. Le goulot est souvent sur la cisaille → on place la cisaille d'abord
+ * 4. Les déplacements doivent aussi respecter l'ordre des opérations liées
+ */
 function calculateSmartInsertionPlan(order) {
-    console.log('[SMART] Calculating plan for order:', order.id);
+    console.log('[SMART] ========================================');
+    console.log('[SMART] V2 - Calculating plan with operation sequencing for order:', order.id);
 
     const result = {
         feasible: true,
@@ -4855,251 +5059,836 @@ function calculateSmartInsertionPlan(order) {
             maxDisplacement: 0,
             nervosity: 0
         },
-        reason: ''
+        reason: '',
+        mode: 'NORMAL'
     };
 
     const now = new Date();
-    const currentWeekNum = getWeekNumber(now);
-    const currentYearNum = getISOWeekYear(now);
+    const deliveryDate = new Date(order.dateLivraison);
 
-    console.log('[SMART] Current time:', now.toLocaleString(), 'Week:', currentWeekNum, 'Year:', currentYearNum);
+    // DÉTECTION MODE FORCE
+    const isLate = deliveryDate < now;
+    const mode = isLate ? 'FORCE' : 'NORMAL';
+    result.mode = mode;
 
-    // Fenêtre de recherche : 14 jours à partir de maintenant (élargie pour plus de flexibilité)
-    const searchHorizonDays = 14;
+    const crThreshold = mode === 'FORCE' ? SCHEDULE_CONFIG.CR_FORCE_THRESHOLD : SCHEDULE_CONFIG.CR_THRESHOLD;
+    const maxDisplacements = mode === 'FORCE' ? SCHEDULE_CONFIG.MAX_DISPLACEMENTS_FORCE : SCHEDULE_CONFIG.MAX_DISPLACEMENTS_NORMAL;
 
-    // Trier les opérations de la commande urgente
+    console.log(`[SMART] Mode: ${mode} (delivery: ${deliveryDate.toLocaleDateString()}, now: ${now.toLocaleDateString()})`);
+    console.log(`[SMART] CR threshold: ${crThreshold}, Max displacements: ${maxDisplacements}`);
+
+    // TRIER dans l'ordre métier : Cisaillage → Poinçonnage → Pliage
     const sortedOperations = [...order.operations].sort((a, b) => {
         const orderMap = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
         return (orderMap[a.type] || 99) - (orderMap[b.type] || 99);
     });
 
-    // Pour chaque opération de la commande urgente
-    for (const urgentOp of sortedOperations) {
+    console.log('[SMART] Operations order:', sortedOperations.map(op => op.type).join(' → '));
+
+    // Contexte de séquençage : garder trace de la fin de l'opération précédente
+    let sequencingContext = {
+        lastEndWeek: null,
+        lastEndYear: null,
+        lastEndDay: null,
+        lastEndHour: null
+    };
+
+    // Placer chaque opération EN SÉQUENCE
+    for (let i = 0; i < sortedOperations.length; i++) {
+        const urgentOp = sortedOperations[i];
+        const isFirstOp = (i === 0);
+
         if (urgentOp.slots.length > 0) continue;
 
-        let machines = getMachinesForOp(urgentOp.type);
-        let bestSlot = null;
-        let bestCost = Infinity;
-        let bestDisplacements = [];
+        console.log(`[SMART] --- [${i+1}/${sortedOperations.length}] Processing: ${urgentOp.type}, duration: ${urgentOp.dureeTotal}h ---`);
 
-        // Scanner tous les créneaux possibles dans la fenêtre de 7 jours
-        let searchDate = new Date(now);
-        for (let dayOffset = 0; dayOffset < searchHorizonDays; dayOffset++) {
-            const weekNum = getWeekNumber(searchDate);
-            const yearNum = getISOWeekYear(searchDate);
-            const dayIdx = searchDate.getDay() - 1; // 0=Lun
-            if (dayIdx < 0 || dayIdx > 4) {
-                searchDate.setDate(searchDate.getDate() + 1);
-                continue; // Skip weekend
-            }
+        // Pour la première opération (cisaille), on cherche partout
+        // Pour les suivantes, on cherche juste après la précédente
+        const searchContext = isFirstOp ? {
+            startWeek: getWeekNumber(now),
+            startYear: getISOWeekYear(now),
+            startDay: null, // chercher partout
+            minHour: now.getHours() + now.getMinutes() / 60
+        } : {
+            startWeek: sequencingContext.lastEndWeek,
+            startYear: sequencingContext.lastEndYear,
+            startDay: sequencingContext.lastEndDay,
+            minHour: sequencingContext.lastEndHour
+        };
 
-            const dayName = DAYS_OF_WEEK[dayIdx];
+        console.log(`[SMART] Search context:`, searchContext);
 
-            for (const machine of machines) {
-                // Essayer de placer à différentes heures de la journée
-                const dayStart = dayName === 'Vendredi' ? 7.0 : 7.5;
-                const dayEnd = dayName === 'Vendredi' ? 12.0 : 16.5; // Heures standard
+        // Vérifier si fragmentation nécessaire
+        const needsFragmentation = urgentOp.dureeTotal > SCHEDULE_CONFIG.FRAGMENTATION_THRESHOLD;
 
-                // Vérifier si c'est aujourd'hui pour éviter le placement dans le passé
-                const isToday = searchDate.toDateString() === now.toDateString();
-                const currentHourDecimal = now.getHours() + now.getMinutes() / 60;
-                const minStartHour = isToday ? Math.max(dayStart, currentHourDecimal) : dayStart;
+        if (needsFragmentation) {
+            console.log(`[SMART] ⚠️ Operation > ${SCHEDULE_CONFIG.FRAGMENTATION_THRESHOLD}h → fragmentation required`);
 
-                for (let startHour = minStartHour; startHour + urgentOp.dureeTotal <= dayEnd; startHour += 0.5) {
-                    const endHour = startHour + urgentOp.dureeTotal;
+            const fragments = fragmentOperation(urgentOp);
+            console.log(`[SMART] Fragmented into ${fragments.length} parts:`, fragments.map(f => f.duration + 'h'));
 
-                    // Identifier les conflits avec les opérations existantes
-                    const conflicts = [];
-                    const placedOrders = getPlacedOrders();
+            for (let j = 0; j < fragments.length; j++) {
+                const fragment = fragments[j];
+                const isFirstFragment = (j === 0);
 
-                    placedOrders.forEach(cmd => {
-                        cmd.operations.forEach(op => {
-                            if (!op.slots) return;
-                            op.slots.forEach(slot => {
-                                if (slot.machine !== machine || slot.jour !== dayName) return;
-                                if (slot.semaine !== weekNum) return;
-                                if (slot.annee && slot.annee !== yearNum) return;
+                const fragmentSearchContext = isFirstFragment ? searchContext : {
+                    startWeek: sequencingContext.lastEndWeek,
+                    startYear: sequencingContext.lastEndYear,
+                    startDay: sequencingContext.lastEndDay,
+                    minHour: sequencingContext.lastEndHour
+                };
 
-                                const slotStart = timeToDecimalHours(slot.heureDebut);
-                                const slotEnd = timeToDecimalHours(slot.heureFin);
+                const fragmentResult = placeOperationSequentially(
+                    fragment.duration,
+                    urgentOp.type,
+                    order,
+                    mode,
+                    crThreshold,
+                    maxDisplacements,
+                    now,
+                    fragmentSearchContext
+                );
 
-                                // Vérifier le chevauchement
-                                if (startHour < slotEnd && endHour > slotStart) {
-                                    conflicts.push({
-                                        commandeId: cmd.id,
-                                        commande: cmd,
-                                        operation: op,
-                                        slot: slot,
-                                        slotStart,
-                                        slotEnd
-                                    });
-                                }
-                            });
-                        });
-                    });
-
-                    // Vérifier les blocages système (Maintenance / Fermeture)
-                    let hasSystemBlock = false;
-                    systemEvents
-                        .filter(e => (e.machine === machine || e.machine === 'ALL') && e.day === dayName && e.week === weekNum && (!e.year || e.year === yearNum))
-                        .forEach(e => {
-                            const eventStart = timeToDecimalHours(e.startTime);
-                            const eventEnd = timeToDecimalHours(e.endTime);
-
-                            // Vérifier le chevauchement
-                            if (startHour < eventEnd && endHour > eventStart) {
-                                hasSystemBlock = true;
-                            }
-                        });
-
-                    // Vérifier la pause déjeuner (Lun-Jeu)
-                    if (dayName !== 'Vendredi') {
-                        const lunchStart = 12.5; // 12:30
-                        const lunchEnd = 13.0;   // 13:00
-                        if (startHour < lunchEnd && endHour > lunchStart) {
-                            hasSystemBlock = true;
-                        }
-                    }
-
-                    // Si blocage système, passer au créneau suivant
-                    if (hasSystemBlock) {
-                        continue;
-                    }
-
-                    // Si pas de conflit, créneau libre
-                    if (conflicts.length === 0) {
-                        if (0 < bestCost) {
-                            bestCost = 0;
-                            bestSlot = {
-                                machine,
-                                week: weekNum,
-                                year: yearNum,
-                                day: dayName,
-                                startHour,
-                                endHour,
-                                hours: urgentOp.dureeTotal
-                            };
-                            bestDisplacements = [];
-                        }
-                        continue;
-                    }
-
-                    // Calculer le coût de déplacement pour ce créneau
-                    let currentDisplacements = [];
-                    let totalCost = 0;
-                    let maxDelay = 0;
-                    let maxDisplacement = 0;
-                    let canDisplace = true;
-
-                    for (const conflict of conflicts) {
-                        const scoreData = calculateDisplaceabilityScore(
-                            conflict.operation,
-                            conflict.commande,
-                            searchDate
-                        );
-
-                        // Vérifier que le déplacement ne crée pas de retard (CR >= 1.05 = 5% de marge minimum)
-                        // Assouplissement : 1.2 était trop strict, on accepte 1.05
-                        if (scoreData.criticalRatio < 1.05) {
-                            canDisplace = false;
-                            break;
-                        }
-
-                        // Calculer le déplacement nécessaire (right-shift minimal)
-                        // On déplace l'opération existante APRÈS la fin de l'opération urgente
-                        const displacementMinutes = (endHour - conflict.slotStart) * 60;
-
-                        if (displacementMinutes > maxDisplacement) {
-                            maxDisplacement = displacementMinutes;
-                        }
-
-                        currentDisplacements.push({
-                            commandeId: conflict.commandeId,
-                            operationType: conflict.operation.type,
-                            oldSlot: {
-                                machine: conflict.slot.machine,
-                                week: conflict.slot.semaine,
-                                year: conflict.slot.annee || yearNum,
-                                day: conflict.slot.jour,
-                                startTime: conflict.slot.heureDebut,
-                                endTime: conflict.slot.heureFin
-                            },
-                            newSlot: {
-                                machine: conflict.slot.machine,
-                                week: weekNum,
-                                year: yearNum,
-                                day: dayName,
-                                startTime: decimalToTimeString(endHour),
-                                endTime: decimalToTimeString(endHour + (conflict.slotEnd - conflict.slotStart))
-                            },
-                            displacement: displacementMinutes,
-                            score: scoreData.score,
-                            slack: scoreData.slack,
-                            criticalRatio: scoreData.criticalRatio,
-                            operation: conflict.operation,
-                            slot: conflict.slot
-                        });
-                    }
-
-                    // Vérifier les contraintes
-                    // Assouplissement : max 5 opérations déplacées au lieu de 3
-                    if (!canDisplace || currentDisplacements.length > 5) {
-                        continue;
-                    }
-
-                    // Calculer le coût total
-                    totalCost = (maxDelay * 10) + (currentDisplacements.length * 2) + (maxDisplacement * 0.01);
-
-                    // Garder le meilleur
-                    if (totalCost < bestCost) {
-                        bestCost = totalCost;
-                        bestSlot = {
-                            machine,
-                            week: weekNum,
-                            year: yearNum,
-                            day: dayName,
-                            startHour,
-                            endHour,
-                            hours: urgentOp.dureeTotal
-                        };
-                        bestDisplacements = currentDisplacements;
-                    }
+                if (!fragmentResult.feasible) {
+                    result.feasible = false;
+                    result.reason = `Fragment ${j+1}/${fragments.length} de ${urgentOp.type}: ${fragmentResult.reason}`;
+                    console.log(`[SMART] ✗ Failed:`, result.reason);
+                    return result;
                 }
+
+                result.slots.push({
+                    ...fragmentResult.slot,
+                    opType: urgentOp.type,
+                    fragmentIndex: j,
+                    totalFragments: fragments.length
+                });
+
+                result.displacements.push(...fragmentResult.displacements);
+
+                // Mettre à jour le contexte pour le fragment suivant
+                sequencingContext = {
+                    lastEndWeek: fragmentResult.slot.week,
+                    lastEndYear: fragmentResult.slot.year,
+                    lastEndDay: fragmentResult.slot.day,
+                    lastEndHour: fragmentResult.slot.endHour
+                };
             }
 
-            searchDate.setDate(searchDate.getDate() + 1);
+        } else {
+            // Placement normal
+            const placementResult = placeOperationSequentially(
+                urgentOp.dureeTotal,
+                urgentOp.type,
+                order,
+                mode,
+                crThreshold,
+                maxDisplacements,
+                now,
+                searchContext
+            );
+
+            if (!placementResult.feasible) {
+                result.feasible = false;
+                result.reason = placementResult.reason;
+                console.log(`[SMART] ✗ Failed to place ${urgentOp.type}:`, placementResult.reason);
+                return result;
+            }
+
+            result.slots.push({
+                ...placementResult.slot,
+                opType: urgentOp.type
+            });
+
+            result.displacements.push(...placementResult.displacements);
+
+            // Mettre à jour le contexte pour l'opération suivante
+            sequencingContext = {
+                lastEndWeek: placementResult.slot.week,
+                lastEndYear: placementResult.slot.year,
+                lastEndDay: placementResult.slot.day,
+                lastEndHour: placementResult.slot.endHour
+            };
+
+            console.log(`[SMART] Next operation will start from: ${sequencingContext.lastEndDay} week ${sequencingContext.lastEndWeek} at ${decimalToTimeString(sequencingContext.lastEndHour)}`);
         }
-
-        // Si aucun créneau trouvé
-        if (!bestSlot) {
-            result.feasible = false;
-            result.reason = `Impossible de placer ${urgentOp.type} sans créer de retard (CR < 1.05) sur 14 jours`;
-            console.log(`[SMART] Failed to place ${urgentOp.type}, searched ${searchHorizonDays} days`);
-            return result;
-        }
-
-        // Ajouter le slot pour l'opération urgente
-        result.slots.push({
-            machine: bestSlot.machine,
-            week: bestSlot.week,
-            year: bestSlot.year,
-            day: bestSlot.day,
-            hours: bestSlot.hours,
-            timeRange: `${decimalToTimeString(bestSlot.startHour)}-${decimalToTimeString(bestSlot.endHour)}`,
-            opType: urgentOp.type
-        });
-
-        // Ajouter les déplacements
-        result.displacements.push(...bestDisplacements);
     }
 
     // Calculer l'impact total
     result.totalImpact.opsDisplaced = result.displacements.length;
-    result.totalImpact.maxDisplacement = Math.max(...result.displacements.map(d => d.displacement), 0);
-    result.totalImpact.maxDelay = 0; // Par construction, on ne crée jamais de retard
+    result.totalImpact.maxDisplacement = result.displacements.length > 0 ?
+        Math.max(...result.displacements.map(d => d.displacement)) : 0;
+    result.totalImpact.maxDelay = 0;
     result.totalImpact.nervosity = result.displacements.length * 2 + result.totalImpact.maxDisplacement * 0.01;
 
+    console.log(`[SMART] ✓ Plan completed successfully`);
+    console.log(`[SMART] Sequence: ${result.slots.map(s => `${s.opType} ${s.day} ${s.timeRange}`).join(' → ')}`);
+    console.log(`[SMART] Mode: ${result.mode}, Displacements: ${result.totalImpact.opsDisplaced}`);
+    console.log('[SMART] ========================================');
+
     return result;
+}
+
+/**
+ * Place une opération en respectant le séquençage
+ */
+function placeOperationSequentially(duration, opType, urgentOrder, mode, crThreshold, maxDisplacements, now, searchContext) {
+    const result = {
+        feasible: false,
+        slot: null,
+        displacements: [],
+        reason: ''
+    };
+
+    const machines = getMachinesForOp(opType);
+
+    let bestOption = null;
+    let bestCost = Infinity;
+
+    console.log(`[PLACE_SEQ] Searching slot for ${opType} (${duration}h) from context:`, searchContext);
+
+    // Si on a un contexte de séquence (pas la première opération)
+    if (searchContext.startDay !== null) {
+        // Chercher à partir de lastEndHour sur le même jour
+        console.log(`[PLACE_SEQ] Sequenced search from ${searchContext.startDay} at ${decimalToTimeString(searchContext.minHour)}`);
+        console.log(`[PLACE_SEQ] Testing ${machines.length} machines: ${machines.join(', ')}`);
+
+        for (const machine of machines) {
+            const slotResult = tryPlaceFromPosition(
+                machine,
+                searchContext.startDay,
+                searchContext.startWeek,
+                searchContext.startYear,
+                searchContext.minHour,
+                duration,
+                opType,
+                urgentOrder,
+                mode,
+                crThreshold,
+                maxDisplacements,
+                now
+            );
+
+            if (slotResult && slotResult.cost < bestCost) {
+                bestCost = slotResult.cost;
+                bestOption = {
+                    ...slotResult,
+                    machine: machine
+                };
+            } else if (slotResult && slotResult.cost === bestCost) {
+                // Même coût : comparer pour trouver le meilleur
+                const currentBest = compareSlotsForSequencing(
+                    slotResult.slot,
+                    bestOption.slot,
+                    searchContext.startWeek,
+                    searchContext.startYear,
+                    searchContext.startDay,
+                    searchContext.minHour
+                );
+                if (currentBest === slotResult.slot) {
+                    bestOption = {
+                        ...slotResult,
+                        machine: machine
+                    };
+                }
+            }
+        }
+
+    } else {
+        // Première opération : chercher partout sur l'horizon
+        console.log(`[PLACE_SEQ] Free search (first operation)`);
+        console.log(`[PLACE_SEQ] Testing ${machines.length} machines: ${machines.join(', ')}`);
+
+        let searchDate = new Date(now);
+        const searchHorizonDays = SCHEDULE_CONFIG.SEARCH_HORIZON_DAYS;
+
+        for (let dayOffset = 0; dayOffset < searchHorizonDays; dayOffset++) {
+            const weekNum = getWeekNumber(searchDate);
+            const yearNum = getISOWeekYear(searchDate);
+            const dayIdx = searchDate.getDay() - 1;
+
+            if (dayIdx < 0 || dayIdx > 4) {
+                searchDate.setDate(searchDate.getDate() + 1);
+                continue;
+            }
+
+            const dayName = DAYS_OF_WEEK[dayIdx];
+            const isToday = searchDate.toDateString() === now.toDateString();
+            const minHour = isToday ? (now.getHours() + now.getMinutes() / 60) : 0;
+
+            for (const machine of machines) {
+                const slotResult = tryPlaceFromPosition(
+                    machine,
+                    dayName,
+                    weekNum,
+                    yearNum,
+                    minHour,
+                    duration,
+                    opType,
+                    urgentOrder,
+                    mode,
+                    crThreshold,
+                    maxDisplacements,
+                    now
+                );
+
+                if (slotResult && slotResult.cost < bestCost) {
+                    bestCost = slotResult.cost;
+                    bestOption = {
+                        ...slotResult,
+                        machine: machine
+                    };
+                } else if (slotResult && slotResult.cost === bestCost && bestCost === 0) {
+                    // Comparer deux slots libres : prendre le plus proche
+                    const currentBest = compareSlotsForSequencing(
+                        slotResult.slot,
+                        bestOption.slot,
+                        weekNum,
+                        yearNum,
+                        dayName,
+                        minHour
+                    );
+                    if (currentBest === slotResult.slot) {
+                        bestOption = {
+                            ...slotResult,
+                            machine: machine
+                        };
+                    }
+                }
+            }
+
+            // Si on a trouvé un créneau libre (coût 0), on peut arrêter la recherche
+            if (bestCost === 0) break;
+            searchDate.setDate(searchDate.getDate() + 1);
+        }
+    }
+
+    if (!bestOption) {
+        result.reason = `Aucun créneau trouvé pour ${opType} avec contraintes de séquençage`;
+        console.log(`[PLACE_SEQ] ✗ ${result.reason}`);
+        return result;
+    }
+
+    console.log(`[PLACE_SEQ] ✓ Best slot found: Machine ${bestOption.machine}, ${bestOption.slot.day} ${decimalToTimeString(bestOption.slot.startHour)}-${decimalToTimeString(bestOption.slot.endHour)}, cost: ${bestCost}, displacements: ${bestOption.displacements.length}`);
+
+    result.feasible = true;
+    result.slot = {
+        machine: bestOption.machine,
+        week: bestOption.slot.week,
+        year: bestOption.slot.year,
+        day: bestOption.slot.day,
+        hours: duration,
+        startHour: bestOption.slot.startHour,
+        endHour: bestOption.slot.endHour,
+        timeRange: `${decimalToTimeString(bestOption.slot.startHour)}-${decimalToTimeString(bestOption.slot.endHour)}`,
+        isOvertime: bestOption.slot.isOvertime
+    };
+    result.displacements = bestOption.displacements;
+
+    return result;
+}
+
+/**
+ * Essaie de placer à partir d'une position donnée (jour/heure)
+ */
+function tryPlaceFromPosition(machine, dayName, weekNum, yearNum, minHour, duration, opType, urgentOrder, mode, crThreshold, maxDisplacements, now) {
+    const schedule = getScheduleForDay(dayName);
+
+    // Chercher un créneau libre d'abord
+    const freeSlot = findNextAvailableSlotForDisplacement(
+        machine,
+        duration,
+        dayName,
+        weekNum,
+        yearNum,
+        minHour,
+        true // allow overtime
+    );
+
+    if (freeSlot) {
+        console.log(`[TRY_PLACE] ✓ Free slot found on ${freeSlot.day} at ${decimalToTimeString(freeSlot.startHour)}`);
+        return {
+            slot: freeSlot,
+            displacements: [],
+            cost: 0
+        };
+    }
+
+    // Pas de créneau libre, essayer avec déplacements
+    console.log(`[TRY_PLACE] No free slot, trying with displacements...`);
+
+    // Scanner les horaires possibles à partir de minHour
+    const isToday = getDateFromWeekAndDay(weekNum, yearNum, dayName).toDateString() === now.toDateString();
+    const currentHourDecimal = now.getHours() + now.getMinutes() / 60;
+    const searchStartHour = isToday ? Math.max(minHour, currentHourDecimal) : Math.max(minHour, schedule.start);
+
+    for (let startHour = searchStartHour; startHour + duration <= schedule.overtimeEnd; startHour += 0.5) {
+        const endHour = startHour + duration;
+
+        // Identifier les conflits
+        const conflicts = findConflicts(machine, dayName, weekNum, yearNum, startHour, endHour);
+
+        // Vérifier blocages système
+        if (hasSystemBlock(machine, dayName, weekNum, yearNum, startHour, endHour)) {
+            continue;
+        }
+
+        if (conflicts.length === 0) {
+            return {
+                slot: {
+                    week: weekNum,
+                    year: yearNum,
+                    day: dayName,
+                    startHour: startHour,
+                    endHour: endHour,
+                    isOvertime: endHour > schedule.standardEnd
+                },
+                displacements: [],
+                cost: 0
+            };
+        }
+
+        if (conflicts.length > maxDisplacements) {
+            continue;
+        }
+
+        // Essayer de déplacer
+        const displacementResult = tryDisplaceConflicts(
+            conflicts,
+            machine,
+            dayName,
+            weekNum,
+            yearNum,
+            endHour, // Les opérations déplacées vont APRÈS
+            mode,
+            crThreshold,
+            now
+        );
+
+        if (displacementResult.success) {
+            const cost = (conflicts.length * 2) + displacementResult.totalDisplacement * 0.01;
+
+            return {
+                slot: {
+                    week: weekNum,
+                    year: yearNum,
+                    day: dayName,
+                    startHour: startHour,
+                    endHour: endHour,
+                    isOvertime: endHour > schedule.standardEnd
+                },
+                displacements: displacementResult.displacements,
+                cost: cost
+            };
+        }
+    }
+
+    // Essayer sur le jour suivant si on a pas trouvé
+    const nextDay = getNextWorkDay(dayName, weekNum, yearNum);
+    if (nextDay) {
+        console.log(`[TRY_PLACE] Trying next day: ${nextDay.day}`);
+        return tryPlaceFromPosition(
+            machine,
+            nextDay.day,
+            nextDay.week,
+            nextDay.year,
+            0, // Début de journée
+            duration,
+            opType,
+            urgentOrder,
+            mode,
+            crThreshold,
+            maxDisplacements,
+            now
+        );
+    }
+
+    return null;
+}
+
+/**
+ * Get next work day
+ */
+function getNextWorkDay(currentDay, currentWeek, currentYear) {
+    const dayIndex = DAYS_OF_WEEK.indexOf(currentDay);
+
+    if (dayIndex < 4) {
+        // Pas encore vendredi, jour suivant
+        return {
+            day: DAYS_OF_WEEK[dayIndex + 1],
+            week: currentWeek,
+            year: currentYear
+        };
+    }
+
+    // C'était vendredi, passer à lundi de la semaine suivante
+    let nextWeek = currentWeek + 1;
+    let nextYear = currentYear;
+
+    if (nextWeek > 52) {
+        nextWeek = 1;
+        nextYear++;
+    }
+
+    return {
+        day: 'Lundi',
+        week: nextWeek,
+        year: nextYear
+    };
+}
+
+/**
+ * Retourne les opérations d'une commande dans l'ordre métier
+ */
+function getOperationSequence(commande) {
+    const orderMap = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
+    return [...commande.operations].sort((a, b) => {
+        return (orderMap[a.type] || 99) - (orderMap[b.type] || 99);
+    });
+}
+
+/**
+ * Retourne les opérations qui suivent une opération donnée dans la séquence
+ */
+function getFollowingOperations(commande, currentOperation) {
+    const sequence = getOperationSequence(commande);
+    const currentIndex = sequence.findIndex(op => op.type === currentOperation.type);
+
+    if (currentIndex === -1 || currentIndex === sequence.length - 1) {
+        return []; // Pas d'opération suivante
+    }
+
+    return sequence.slice(currentIndex + 1);
+}
+
+/**
+ * Compare deux slots et retourne le meilleur (le plus proche du point de départ)
+ */
+function compareSlotsForSequencing(slotA, slotB, targetWeek, targetYear, targetDay, targetHour) {
+    // Calculer la distance temporelle depuis le point cible
+    const getTimeDistance = (slot) => {
+        // Convertir week/year/day en nombre de jours depuis une référence
+        const weekDiff = (slot.week - targetWeek) + (slot.year - targetYear) * 52;
+        const dayMap = { 'Lundi': 0, 'Mardi': 1, 'Mercredi': 2, 'Jeudi': 3, 'Vendredi': 4 };
+        const dayDiff = (dayMap[slot.day] || 0) - (dayMap[targetDay] || 0);
+        const totalDayDiff = weekDiff * 5 + dayDiff;
+        const hourDiff = slot.startHour - targetHour;
+
+        return totalDayDiff * 24 + hourDiff; // Distance en heures
+    };
+
+    const distA = getTimeDistance(slotA);
+    const distB = getTimeDistance(slotB);
+
+    // Préférer le slot le plus proche
+    if (distA < distB) return slotA;
+    if (distB < distA) return slotB;
+
+    // Si même distance, préférer le slot sans overtime
+    if (!slotA.isOvertime && slotB.isOvertime) return slotA;
+    if (!slotB.isOvertime && slotA.isOvertime) return slotB;
+
+    return slotA; // Par défaut
+}
+
+/**
+ * Déplace une opération et toutes les opérations suivantes en cascade
+ */
+function displaceOperationWithCascade(conflict, destinationSlot, now) {
+    const allDisplacements = [];
+    const commande = conflict.commande;
+
+    console.log(`[CASCADE] Displacing ${conflict.operation.type} of order ${commande.id} and following operations...`);
+
+    // 1. Déplacer l'opération principale
+    const mainDisplacement = {
+        commandeId: commande.id,
+        operationType: conflict.operation.type,
+        oldSlot: {
+            machine: conflict.slot.machine,
+            week: conflict.slot.semaine,
+            year: conflict.slot.annee,
+            day: conflict.slot.jour,
+            startTime: conflict.slot.heureDebut,
+            endTime: conflict.slot.heureFin
+        },
+        newSlot: {
+            machine: destinationSlot.machine,
+            week: destinationSlot.week,
+            year: destinationSlot.year,
+            day: destinationSlot.day,
+            startTime: decimalToTimeString(destinationSlot.startHour),
+            endTime: decimalToTimeString(destinationSlot.endHour)
+        },
+        operation: conflict.operation,
+        slot: conflict.slot
+    };
+
+    allDisplacements.push(mainDisplacement);
+
+    // 2. Déplacer les opérations suivantes en cascade
+    const followingOps = getFollowingOperations(commande, conflict.operation);
+
+    if (followingOps.length > 0) {
+        console.log(`[CASCADE] Found ${followingOps.length} following operations to cascade:`, followingOps.map(op => op.type));
+
+        let currentEndWeek = destinationSlot.week;
+        let currentEndYear = destinationSlot.year;
+        let currentEndDay = destinationSlot.day;
+        let currentEndHour = destinationSlot.endHour;
+
+        for (const followingOp of followingOps) {
+            // Trouver le slot actuel de cette opération
+            if (!followingOp.slots || followingOp.slots.length === 0) {
+                console.log(`[CASCADE] ⚠️ Following operation ${followingOp.type} has no slots, skipping cascade`);
+                continue;
+            }
+
+            const currentSlot = followingOp.slots[0];
+            const opDuration = followingOp.dureeTotal;
+            const opMachines = getMachinesForOp(followingOp.type);
+
+            // CHERCHER LE MEILLEUR SLOT PARMI TOUTES LES MACHINES
+            console.log(`[CASCADE] Searching best slot for ${followingOp.type} across ${opMachines.length} machines...`);
+
+            let bestSlot = null;
+            for (const machine of opMachines) {
+                const candidateSlot = findNextAvailableSlotForDisplacement(
+                    machine,
+                    opDuration,
+                    currentEndDay,
+                    currentEndWeek,
+                    currentEndYear,
+                    currentEndHour,
+                    true
+                );
+
+                if (candidateSlot) {
+                    console.log(`[CASCADE]   - Machine ${machine}: ${candidateSlot.day} ${decimalToTimeString(candidateSlot.startHour)}`);
+
+                    if (!bestSlot) {
+                        bestSlot = candidateSlot;
+                    } else {
+                        bestSlot = compareSlotsForSequencing(
+                            candidateSlot,
+                            bestSlot,
+                            currentEndWeek,
+                            currentEndYear,
+                            currentEndDay,
+                            currentEndHour
+                        );
+                    }
+                }
+            }
+
+            if (!bestSlot) {
+                console.log(`[CASCADE] ✗ Cannot find slot for following operation ${followingOp.type}, cascade failed`);
+                return null; // Échec du déplacement en cascade
+            }
+
+            console.log(`[CASCADE] ✓ Best slot for ${followingOp.type}: Machine ${bestSlot.machine}, ${bestSlot.day} ${decimalToTimeString(bestSlot.startHour)}-${decimalToTimeString(bestSlot.endHour)}`);
+
+            allDisplacements.push({
+                commandeId: commande.id,
+                operationType: followingOp.type,
+                oldSlot: {
+                    machine: currentSlot.machine,
+                    week: currentSlot.semaine,
+                    year: currentSlot.annee,
+                    day: currentSlot.jour,
+                    startTime: currentSlot.heureDebut,
+                    endTime: currentSlot.heureFin
+                },
+                newSlot: {
+                    machine: bestSlot.machine,
+                    week: bestSlot.week,
+                    year: bestSlot.year,
+                    day: bestSlot.day,
+                    startTime: decimalToTimeString(bestSlot.startHour),
+                    endTime: decimalToTimeString(bestSlot.endHour)
+                },
+                operation: followingOp,
+                slot: currentSlot
+            });
+
+            // Mettre à jour pour l'opération suivante
+            currentEndWeek = bestSlot.week;
+            currentEndYear = bestSlot.year;
+            currentEndDay = bestSlot.day;
+            currentEndHour = bestSlot.endHour;
+        }
+    }
+
+    return allDisplacements;
+}
+
+/**
+ * Essaie de déplacer tous les conflits (avec cascade des opérations liées)
+ */
+function tryDisplaceConflicts(conflicts, machine, dayName, weekNum, yearNum, afterHour, mode, crThreshold, now) {
+    const result = {
+        success: false,
+        displacements: [],
+        totalDisplacement: 0
+    };
+
+    for (const conflict of conflicts) {
+        // Calculer CR avant
+        const scoreDataBefore = calculateDisplaceabilityScore(
+            conflict.operation,
+            conflict.commande,
+            now
+        );
+
+        // Chercher créneau de destination
+        const opDuration = conflict.slotEnd - conflict.slotStart;
+        const destinationSlot = findNextAvailableSlotForDisplacement(
+            machine,
+            opDuration,
+            dayName,
+            weekNum,
+            yearNum,
+            afterHour,
+            true
+        );
+
+        if (!destinationSlot) {
+            console.log(`[DISPLACE] ✗ No destination slot for ${conflict.commandeId} ${conflict.operation.type}`);
+            return result;
+        }
+
+        // Ajouter la machine au destinationSlot
+        destinationSlot.machine = machine;
+
+        // DÉPLACEMENT EN CASCADE : déplacer l'opération ET toutes les suivantes
+        const cascadeDisplacements = displaceOperationWithCascade(conflict, destinationSlot, now);
+
+        if (!cascadeDisplacements) {
+            console.log(`[DISPLACE] ✗ Cascade displacement failed for ${conflict.commandeId} ${conflict.operation.type}`);
+            return result;
+        }
+
+        // Calculer CR après pour TOUS les déplacements en cascade
+        let totalDisplacementMinutes = 0;
+        for (const disp of cascadeDisplacements) {
+            const oldStart = timeToDecimalHours(disp.oldSlot.startTime);
+            const newStart = timeToDecimalHours(disp.newSlot.startTime);
+            const dispMinutes = (newStart - oldStart) * 60;
+            totalDisplacementMinutes += Math.abs(dispMinutes);
+
+            // Calculer le nouveau CR pour cette opération
+            const newDeliveryDate = new Date(conflict.commande.dateLivraison);
+            const newRemainingTime = (newDeliveryDate - now) / (1000 * 60 * 60) - (dispMinutes / 60);
+            const newCR = newRemainingTime / Math.max(0.1, scoreDataBefore.remainingWork);
+
+            // Vérifier seuil CR
+            if (newCR < crThreshold) {
+                if (mode === 'FORCE') {
+                    console.log(`[DISPLACE] ⚠️ FORCE mode: accepting risky displacement (CR ${newCR.toFixed(2)} < ${crThreshold})`);
+                } else {
+                    console.log(`[DISPLACE] ✗ CR too low after cascade displacement: ${newCR.toFixed(2)} < ${crThreshold}`);
+                    return result;
+                }
+            }
+
+            // Ajouter les infos de CR à chaque déplacement
+            disp.displacement = dispMinutes;
+            disp.crBefore = scoreDataBefore.criticalRatio;
+            disp.crAfter = newCR;
+            disp.slack = scoreDataBefore.slack;
+            disp.criticalRatio = newCR;
+            disp.score = scoreDataBefore.score;
+            disp.status = newCR < crThreshold ? 'RISQUE' : 'OK';
+        }
+
+        // Ajouter tous les déplacements en cascade
+        result.displacements.push(...cascadeDisplacements);
+        result.totalDisplacement += totalDisplacementMinutes;
+    }
+
+    result.success = true;
+    return result;
+}
+
+/**
+ * Fragment une opération en sous-parties
+ */
+function fragmentOperation(operation) {
+    const fragments = [];
+    let remainingDuration = operation.dureeTotal;
+    const maxFragmentSize = 2.5;
+
+    while (remainingDuration > 0) {
+        const fragmentSize = Math.min(remainingDuration, maxFragmentSize);
+        fragments.push({
+            duration: fragmentSize,
+            type: operation.type
+        });
+        remainingDuration -= fragmentSize;
+    }
+
+    return fragments;
+}
+
+/**
+ * Find conflicts at a specific time slot
+ */
+function findConflicts(machine, dayName, weekNum, yearNum, startHour, endHour) {
+    const conflicts = [];
+    const placedOrders = getPlacedOrders();
+
+    placedOrders.forEach(cmd => {
+        cmd.operations.forEach(op => {
+            if (!op.slots) return;
+            op.slots.forEach(slot => {
+                if (slot.machine !== machine || slot.jour !== dayName) return;
+                if (slot.semaine !== weekNum) return;
+                if (slot.annee && slot.annee !== yearNum) return;
+
+                const slotStart = timeToDecimalHours(slot.heureDebut);
+                const slotEnd = timeToDecimalHours(slot.heureFin);
+
+                if (startHour < slotEnd && endHour > slotStart) {
+                    conflicts.push({
+                        commandeId: cmd.id,
+                        commande: cmd,
+                        operation: op,
+                        slot: slot,
+                        slotStart,
+                        slotEnd
+                    });
+                }
+            });
+        });
+    });
+
+    return conflicts;
+}
+
+/**
+ * Check if there is a system block
+ */
+function hasSystemBlock(machine, dayName, weekNum, yearNum, startHour, endHour) {
+    const hasEvent = systemEvents.some(e => {
+        if ((e.machine !== machine && e.machine !== 'ALL')) return false;
+        if (e.day !== dayName || e.week !== weekNum) return false;
+        if (e.year && e.year !== yearNum) return false;
+
+        const eventStart = timeToDecimalHours(e.startTime);
+        const eventEnd = timeToDecimalHours(e.endTime);
+
+        return (startHour < eventEnd && endHour > eventStart);
+    });
+
+    if (hasEvent) return true;
+
+    const schedule = getScheduleForDay(dayName);
+    if (schedule.lunchStart !== null) {
+        if (startHour < schedule.lunchEnd && endHour > schedule.lunchStart) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**

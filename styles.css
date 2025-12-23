@@ -2052,6 +2052,14 @@ body {
     box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2);
 }
 
+.scenario-card.smart {
+    border-color: #0dcaf0;
+}
+
+.scenario-card.smart:hover {
+    box-shadow: 0 4px 12px rgba(13, 202, 240, 0.3);
+}
+
 .scenario-header {
     display: flex;
     justify-content: space-between;
@@ -2425,3 +2433,59 @@ body {
         box-shadow: none;
     }
 }
+/* Enable drop-through on operations when dragging */
+body.dragging-active .operation-slot:not(.dragging) {
+    pointer-events: none !important;
+}
+
+body.dragging-active .drop-zone {
+    pointer-events: auto !important;
+}
+
+/* ===================================================================
+   SMART SCENARIO - Displacement Animations
+   =================================================================== */
+
+/* Animation for displaced operations */
+@keyframes slideDisplacement {
+    0% {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    50% {
+        transform: translateX(20px);
+        opacity: 0.5;
+    }
+    100% {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Visual indicator for displaced operations */
+.operation-slot.displaced {
+    animation: slideDisplacement 2s ease;
+    background: #fff3cd !important;
+    border-left: 3px solid #ffc107 !important;
+}
+
+/* Badge for smart operations */
+.operation-slot.smart {
+    background: linear-gradient(135deg, #cff4fc 0%, #b6ebf5 100%) !important;
+    border-left: 3px solid #0dcaf0 !important;
+}
+
+/* Pulse animation for smart operations */
+@keyframes pulseSmart {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(13, 202, 240, 0.7);
+    }
+    50% {
+        box-shadow: 0 0 0 10px rgba(13, 202, 240, 0);
+    }
+}
+
+.operation-slot.smart {
+    animation: pulseSmart 2s infinite;
+}
+

@@ -4816,7 +4816,7 @@ const SCHEDULE_CONFIG = {
     CR_FORCE_THRESHOLD: 0.95, // En mode FORCE, on accepte jusqu'à 0.95
     MAX_DISPLACEMENTS_NORMAL: 5,
     MAX_DISPLACEMENTS_FORCE: 20,
-    FRAGMENTATION_THRESHOLD: 3.0, // Fragmenter les opérations > 3h
+    // Fragmentation supprimée : les opérations ne se splitent QUE si pause/multi-jours
     SEARCH_HORIZON_DAYS: 14
 };
 
@@ -4945,14 +4945,9 @@ function findNextAvailableSlotForDisplacement(machine, duration, startDay, start
                 });
             });
 
-        // Ajouter la pause déjeuner si applicable
-        if (schedule.lunchStart !== null) {
-            busySlots.push({
-                start: schedule.lunchStart,
-                end: schedule.lunchEnd,
-                type: 'lunch'
-            });
-        }
+        // La pause déjeuner n'est PLUS ajoutée comme busy slot
+        // Le split intelligent s'occupe de splitter avant/après la pause si nécessaire
+        // On la garde uniquement pour les system events qui sont de vraies maintenances
 
         // Trier les créneaux occupés
         busySlots.sort((a, b) => a.start - b.start);
@@ -5118,99 +5113,47 @@ function calculateSmartInsertionPlan(order) {
 
         console.log(`[SMART] Search context:`, searchContext);
 
-        // Vérifier si fragmentation nécessaire
-        const needsFragmentation = urgentOp.dureeTotal > SCHEDULE_CONFIG.FRAGMENTATION_THRESHOLD;
+        // Placement de l'opération (le split se fera automatiquement si nécessaire)
+        const placementResult = placeOperationSequentially(
+            urgentOp.dureeTotal,
+            urgentOp.type,
+            order,
+            mode,
+            crThreshold,
+            maxDisplacements,
+            now,
+            searchContext
+        );
 
-        if (needsFragmentation) {
-            console.log(`[SMART] ⚠️ Operation > ${SCHEDULE_CONFIG.FRAGMENTATION_THRESHOLD}h → fragmentation required`);
+        if (!placementResult.feasible) {
+            result.feasible = false;
+            result.reason = placementResult.reason;
+            console.log(`[SMART] ✗ Failed to place ${urgentOp.type}:`, placementResult.reason);
+            return result;
+        }
 
-            const fragments = fragmentOperation(urgentOp);
-            console.log(`[SMART] Fragmented into ${fragments.length} parts:`, fragments.map(f => f.duration + 'h'));
+        // Le placement peut retourner un ou plusieurs slots (si split pause/multi-jours)
+        const slots = Array.isArray(placementResult.slots) ? placementResult.slots : [placementResult.slot];
 
-            for (let j = 0; j < fragments.length; j++) {
-                const fragment = fragments[j];
-                const isFirstFragment = (j === 0);
-
-                const fragmentSearchContext = isFirstFragment ? searchContext : {
-                    startWeek: sequencingContext.lastEndWeek,
-                    startYear: sequencingContext.lastEndYear,
-                    startDay: sequencingContext.lastEndDay,
-                    minHour: sequencingContext.lastEndHour
-                };
-
-                const fragmentResult = placeOperationSequentially(
-                    fragment.duration,
-                    urgentOp.type,
-                    order,
-                    mode,
-                    crThreshold,
-                    maxDisplacements,
-                    now,
-                    fragmentSearchContext
-                );
-
-                if (!fragmentResult.feasible) {
-                    result.feasible = false;
-                    result.reason = `Fragment ${j+1}/${fragments.length} de ${urgentOp.type}: ${fragmentResult.reason}`;
-                    console.log(`[SMART] ✗ Failed:`, result.reason);
-                    return result;
-                }
-
-                result.slots.push({
-                    ...fragmentResult.slot,
-                    opType: urgentOp.type,
-                    fragmentIndex: j,
-                    totalFragments: fragments.length
-                });
-
-                result.displacements.push(...fragmentResult.displacements);
-
-                // Mettre à jour le contexte pour le fragment suivant
-                sequencingContext = {
-                    lastEndWeek: fragmentResult.slot.week,
-                    lastEndYear: fragmentResult.slot.year,
-                    lastEndDay: fragmentResult.slot.day,
-                    lastEndHour: fragmentResult.slot.endHour
-                };
-            }
-
-        } else {
-            // Placement normal
-            const placementResult = placeOperationSequentially(
-                urgentOp.dureeTotal,
-                urgentOp.type,
-                order,
-                mode,
-                crThreshold,
-                maxDisplacements,
-                now,
-                searchContext
-            );
-
-            if (!placementResult.feasible) {
-                result.feasible = false;
-                result.reason = placementResult.reason;
-                console.log(`[SMART] ✗ Failed to place ${urgentOp.type}:`, placementResult.reason);
-                return result;
-            }
-
+        for (const slot of slots) {
             result.slots.push({
-                ...placementResult.slot,
+                ...slot,
                 opType: urgentOp.type
             });
-
-            result.displacements.push(...placementResult.displacements);
-
-            // Mettre à jour le contexte pour l'opération suivante
-            sequencingContext = {
-                lastEndWeek: placementResult.slot.week,
-                lastEndYear: placementResult.slot.year,
-                lastEndDay: placementResult.slot.day,
-                lastEndHour: placementResult.slot.endHour
-            };
-
-            console.log(`[SMART] Next operation will start from: ${sequencingContext.lastEndDay} week ${sequencingContext.lastEndWeek} at ${decimalToTimeString(sequencingContext.lastEndHour)}`);
         }
+
+        result.displacements.push(...placementResult.displacements);
+
+        // Mettre à jour le contexte pour l'opération suivante (dernier slot)
+        const lastSlot = slots[slots.length - 1];
+        sequencingContext = {
+            lastEndWeek: lastSlot.week,
+            lastEndYear: lastSlot.year,
+            lastEndDay: lastSlot.day,
+            lastEndHour: lastSlot.endHour || (lastSlot.startHour + lastSlot.hours)
+        };
+
+        console.log(`[SMART] Next operation will start from: ${sequencingContext.lastEndDay} week ${sequencingContext.lastEndWeek} at ${decimalToTimeString(sequencingContext.lastEndHour)}`);
     }
 
     // Calculer l'impact total
@@ -5370,19 +5313,50 @@ function placeOperationSequentially(duration, opType, urgentOrder, mode, crThres
 
     console.log(`[PLACE_SEQ] ✓ Best slot found: Machine ${bestOption.machine}, ${bestOption.slot.day} ${decimalToTimeString(bestOption.slot.startHour)}-${decimalToTimeString(bestOption.slot.endHour)}, cost: ${bestCost}, displacements: ${bestOption.displacements.length}`);
 
+    // SPLIT INTELLIGENT : vérifier si l'opération doit être splittée (pause/multi-jours)
+    const operation = { type: opType, dureeTotal: duration };
+    const fragments = splitOperationForSlot(
+        operation,
+        bestOption.machine,
+        bestOption.slot.week,
+        bestOption.slot.year,
+        bestOption.slot.day,
+        bestOption.slot.startHour
+    );
+
     result.feasible = true;
-    result.slot = {
-        machine: bestOption.machine,
-        week: bestOption.slot.week,
-        year: bestOption.slot.year,
-        day: bestOption.slot.day,
-        hours: duration,
-        startHour: bestOption.slot.startHour,
-        endHour: bestOption.slot.endHour,
-        timeRange: `${decimalToTimeString(bestOption.slot.startHour)}-${decimalToTimeString(bestOption.slot.endHour)}`,
-        isOvertime: bestOption.slot.isOvertime
-    };
     result.displacements = bestOption.displacements;
+
+    if (fragments.length === 1) {
+        // Pas de split, retour simple
+        result.slot = {
+            machine: bestOption.machine,
+            week: fragments[0].week,
+            year: fragments[0].year,
+            day: fragments[0].day,
+            hours: fragments[0].duration,
+            startHour: fragments[0].startHour,
+            endHour: fragments[0].endHour,
+            timeRange: `${decimalToTimeString(fragments[0].startHour)}-${decimalToTimeString(fragments[0].endHour)}`,
+            isOvertime: bestOption.slot.isOvertime
+        };
+    } else {
+        // Split en plusieurs fragments : retourner tous les slots
+        console.log(`[PLACE_SEQ] ⚠️ Operation split into ${fragments.length} fragments (pause/multi-day)`);
+        result.slots = fragments.map((frag, idx) => ({
+            machine: frag.machine,
+            week: frag.week,
+            year: frag.year,
+            day: frag.day,
+            hours: frag.duration,
+            startHour: frag.startHour,
+            endHour: frag.endHour,
+            timeRange: `${decimalToTimeString(frag.startHour)}-${decimalToTimeString(frag.endHour)}`,
+            isOvertime: frag.endHour > getScheduleForDay(frag.day).standardEnd,
+            fragmentIndex: idx,
+            totalFragments: fragments.length
+        }));
+    }
 
     return result;
 }
@@ -5687,34 +5661,52 @@ function displaceOperationWithCascade(conflict, destinationSlot, now) {
 
             console.log(`[CASCADE] ✓ Best slot for ${followingOp.type}: Machine ${bestSlot.machine}, ${bestSlot.day} ${decimalToTimeString(bestSlot.startHour)}-${decimalToTimeString(bestSlot.endHour)}`);
 
-            allDisplacements.push({
-                commandeId: commande.id,
-                operationType: followingOp.type,
-                oldSlot: {
-                    machine: currentSlot.machine,
-                    week: currentSlot.semaine,
-                    year: currentSlot.annee,
-                    day: currentSlot.jour,
-                    startTime: currentSlot.heureDebut,
-                    endTime: currentSlot.heureFin
-                },
-                newSlot: {
-                    machine: bestSlot.machine,
-                    week: bestSlot.week,
-                    year: bestSlot.year,
-                    day: bestSlot.day,
-                    startTime: decimalToTimeString(bestSlot.startHour),
-                    endTime: decimalToTimeString(bestSlot.endHour)
-                },
-                operation: followingOp,
-                slot: currentSlot
-            });
+            // SPLIT INTELLIGENT : vérifier si l'opération doit être splittée (pause/multi-jours)
+            const opFragments = splitOperationForSlot(
+                followingOp,
+                bestSlot.machine,
+                bestSlot.week,
+                bestSlot.year,
+                bestSlot.day,
+                bestSlot.startHour
+            );
 
-            // Mettre à jour pour l'opération suivante
-            currentEndWeek = bestSlot.week;
-            currentEndYear = bestSlot.year;
-            currentEndDay = bestSlot.day;
-            currentEndHour = bestSlot.endHour;
+            // Créer un déplacement pour chaque fragment (ou un seul si pas de split)
+            for (let fragIdx = 0; fragIdx < opFragments.length; fragIdx++) {
+                const frag = opFragments[fragIdx];
+
+                allDisplacements.push({
+                    commandeId: commande.id,
+                    operationType: followingOp.type,
+                    oldSlot: {
+                        machine: currentSlot.machine,
+                        week: currentSlot.semaine,
+                        year: currentSlot.annee,
+                        day: currentSlot.jour,
+                        startTime: currentSlot.heureDebut,
+                        endTime: currentSlot.heureFin
+                    },
+                    newSlot: {
+                        machine: frag.machine,
+                        week: frag.week,
+                        year: frag.year,
+                        day: frag.day,
+                        startTime: decimalToTimeString(frag.startHour),
+                        endTime: decimalToTimeString(frag.endHour)
+                    },
+                    operation: followingOp,
+                    slot: currentSlot,
+                    fragmentIndex: fragIdx,
+                    totalFragments: opFragments.length
+                });
+            }
+
+            // Mettre à jour pour l'opération suivante (utiliser le dernier fragment)
+            const lastFragment = opFragments[opFragments.length - 1];
+            currentEndWeek = lastFragment.week;
+            currentEndYear = lastFragment.year;
+            currentEndDay = lastFragment.day;
+            currentEndHour = lastFragment.endHour;
         }
     }
 
@@ -5810,22 +5802,99 @@ function tryDisplaceConflicts(conflicts, machine, dayName, weekNum, yearNum, aft
 }
 
 /**
- * Fragment une opération en sous-parties
+ * Split intelligent d'une opération en fragments si nécessaire
+ * Une opération se split UNIQUEMENT si :
+ * 1. Elle chevauche une pause déjeuner
+ * 2. Elle s'étale sur plusieurs jours
+ * Les fragments restent TOUJOURS sur la même machine
  */
-function fragmentOperation(operation) {
+function splitOperationForSlot(operation, machine, startWeek, startYear, startDay, startHour) {
     const fragments = [];
-    let remainingDuration = operation.dureeTotal;
-    const maxFragmentSize = 2.5;
+    let remainingDuration = operation.dureeTotal || operation.duration;
+    let currentWeek = startWeek;
+    let currentYear = startYear;
+    let currentDay = startDay;
+    let currentHour = startHour;
 
-    while (remainingDuration > 0) {
-        const fragmentSize = Math.min(remainingDuration, maxFragmentSize);
-        fragments.push({
-            duration: fragmentSize,
-            type: operation.type
-        });
-        remainingDuration -= fragmentSize;
+    console.log(`[SPLIT] Checking if split needed for ${operation.type || 'operation'} (${remainingDuration}h) starting at ${currentDay} ${decimalToTimeString(currentHour)}`);
+
+    while (remainingDuration > 0.01) {
+        const schedule = getScheduleForDay(currentDay);
+        let availableUntil = schedule.overtimeEnd;
+
+        // Vérifier si on chevauche la pause déjeuner
+        let fragmentEnd = currentHour + remainingDuration;
+
+        if (schedule.lunchStart !== null && currentHour < schedule.lunchStart && fragmentEnd > schedule.lunchStart) {
+            // L'opération chevauche la pause déjeuner → split avant la pause
+            const durationBeforeLunch = schedule.lunchStart - currentHour;
+            console.log(`[SPLIT] ⚠️ Operation crosses lunch break → splitting before lunch (${durationBeforeLunch}h)`);
+
+            fragments.push({
+                duration: durationBeforeLunch,
+                machine: machine,
+                week: currentWeek,
+                year: currentYear,
+                day: currentDay,
+                startHour: currentHour,
+                endHour: schedule.lunchStart,
+                type: operation.type || operation.operationType
+            });
+
+            remainingDuration -= durationBeforeLunch;
+            currentHour = schedule.lunchEnd; // Reprendre après la pause
+            fragmentEnd = currentHour + remainingDuration;
+        }
+
+        // Vérifier si l'opération dépasse la fin de journée
+        if (fragmentEnd > schedule.overtimeEnd) {
+            // L'opération dépasse la fin de journée → split à la fin de journée
+            const durationUntilEOD = schedule.overtimeEnd - currentHour;
+            console.log(`[SPLIT] ⚠️ Operation exceeds end of day → splitting at EOD (${durationUntilEOD}h)`);
+
+            fragments.push({
+                duration: durationUntilEOD,
+                machine: machine,
+                week: currentWeek,
+                year: currentYear,
+                day: currentDay,
+                startHour: currentHour,
+                endHour: schedule.overtimeEnd,
+                type: operation.type || operation.operationType
+            });
+
+            remainingDuration -= durationUntilEOD;
+
+            // Passer au jour suivant
+            const nextDay = getNextWorkDay(currentDay, currentWeek, currentYear);
+            if (!nextDay) {
+                console.log(`[SPLIT] ✗ Cannot continue to next day`);
+                break;
+            }
+
+            currentWeek = nextDay.week;
+            currentYear = nextDay.year;
+            currentDay = nextDay.day;
+            currentHour = getScheduleForDay(currentDay).start;
+            console.log(`[SPLIT] Continuing on next day: ${currentDay} week ${currentWeek} at ${decimalToTimeString(currentHour)}`);
+        } else {
+            // Pas de split nécessaire, l'opération tient dans le créneau
+            fragments.push({
+                duration: remainingDuration,
+                machine: machine,
+                week: currentWeek,
+                year: currentYear,
+                day: currentDay,
+                startHour: currentHour,
+                endHour: currentHour + remainingDuration,
+                type: operation.type || operation.operationType
+            });
+
+            remainingDuration = 0;
+        }
     }
 
+    console.log(`[SPLIT] Result: ${fragments.length} fragment(s):`, fragments.map(f => `${f.day} ${decimalToTimeString(f.startHour)}-${decimalToTimeString(f.endHour)}`));
     return fragments;
 }
 
@@ -5865,7 +5934,8 @@ function findConflicts(machine, dayName, weekNum, yearNum, startHour, endHour) {
 }
 
 /**
- * Check if there is a system block
+ * Check if there is a system block (maintenance/fermeture)
+ * Note : La pause déjeuner n'est PLUS bloquante ici, car le split intelligent s'en occupe
  */
 function hasSystemBlock(machine, dayName, weekNum, yearNum, startHour, endHour) {
     const hasEvent = systemEvents.some(e => {
@@ -5881,12 +5951,8 @@ function hasSystemBlock(machine, dayName, weekNum, yearNum, startHour, endHour) 
 
     if (hasEvent) return true;
 
-    const schedule = getScheduleForDay(dayName);
-    if (schedule.lunchStart !== null) {
-        if (startHour < schedule.lunchEnd && endHour > schedule.lunchStart) {
-            return true;
-        }
-    }
+    // La pause déjeuner n'est plus vérifiée ici : le split intelligent s'en occupe
+    // Le slot peut chevaucher la pause, il sera automatiquement splitté
 
     return false;
 }

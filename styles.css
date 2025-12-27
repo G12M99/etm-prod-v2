@@ -2372,15 +2372,15 @@ body {
     }
 
     /* Hide UI elements */
-    .header, 
-    .sidebar, 
-    .time-indicator, 
-    .modal, 
+    .header,
+    .sidebar,
+    .time-indicator,
+    .modal,
     .sync-controls,
     .view-toggle,
     .btn,
     .toast,
-    .overtime-separator { 
+    .overtime-separator {
         display: none !important;
     }
 
@@ -2415,7 +2415,7 @@ body {
         margin-bottom: 10px;
         text-align: center;
     }
-    
+
     /* Make sure headers are visible */
     .journee-header, .semaine-header {
         background: white;
@@ -2424,14 +2424,144 @@ body {
 
     /* Adjust sizing for paper */
     .day-cell {
-        min-height: 800px; 
+        min-height: 800px;
         border: 1px solid #ccc;
     }
-    
+
     .vue-semaine, .vue-journee {
         margin: 0;
         box-shadow: none;
     }
+
+    /* ===================================================================
+       IMPRESSION VUE JOURNEE - UNE MACHINE SUR DEUX FEUILLES PAYSAGE
+       Division verticale: Partie Matin sur page 1, Partie Après-midi sur page 2
+       =================================================================== */
+
+    /* Preserve grid layout structure */
+    .vue-journee .day-headers {
+        display: grid !important;
+        grid-template-columns: 200px repeat(5, 1fr) !important;
+        page-break-after: avoid;
+        margin-bottom: 5px;
+        gap: 0 !important;
+    }
+
+    /* All machine rows */
+    .vue-journee .journee-row {
+        display: grid !important;
+        grid-template-columns: 200px repeat(5, 1fr) !important;
+        page-break-inside: avoid;
+        margin-bottom: 20px;
+        gap: 0 !important;
+    }
+
+    /* Force consistent sizing for header cells */
+    .vue-journee .day-header-cell {
+        padding: 8px !important;
+        box-sizing: border-box !important;
+    }
+
+    .vue-journee .day-header-cell.machine-col {
+        width: 200px !important;
+    }
+
+    /* Top row (Matin) - force page break after */
+    .vue-journee .journee-row.print-row-top {
+        page-break-after: always;
+    }
+
+    /* Bottom row (Après-midi) - force page break after */
+    .vue-journee .journee-row.print-row-bottom {
+        page-break-after: always;
+    }
+
+    /* Keep the last machine row on its page without extra break */
+    .vue-journee .journee-row:last-child {
+        page-break-after: auto;
+    }
+
+    /* Clip the timeline to show only top half for morning rows */
+    .vue-journee .print-row-top .timeline-container {
+        max-height: 350px;
+        overflow: hidden;
+    }
+
+    /* Clip and shift the timeline to show only bottom half for afternoon rows */
+    .vue-journee .print-row-bottom .timeline-container {
+        max-height: 350px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .vue-journee .print-row-bottom .time-grid,
+    .vue-journee .print-row-bottom .operations-overlay {
+        position: relative;
+        top: -350px;
+    }
+
+    /* Adjust day-cell height for split rows */
+    .vue-journee .print-row-top .day-cell,
+    .vue-journee .print-row-bottom .day-cell {
+        min-height: 400px;
+    }
+
+    /* Print the journee header only on first page */
+    .vue-journee .journee-header {
+        page-break-after: avoid;
+        margin-bottom: 15px;
+    }
+
+    /* Add machine header info for each printed page */
+    .vue-journee .machine-cell {
+        border: 1px solid #333;
+        background-color: #f5f5f5 !important;
+        padding: 8px !important;
+        box-sizing: border-box !important;
+        width: 200px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+
+    /* Increase font sizes for better readability on 2 pages */
+    .vue-journee .machine-name {
+        font-size: 16px;
+        font-weight: bold;
+        text-align: center;
+    }
+
+    .vue-journee .day-header-cell {
+        font-size: 13px;
+        font-weight: bold;
+        border: 1px solid #333;
+    }
+
+    .vue-journee .day-stat-header {
+        font-size: 11px;
+        padding: 6px;
+    }
+
+    /* Enhance operation slot visibility */
+    .vue-journee .operation-slot {
+        font-size: 10px;
+        border: 1.5px solid rgba(0,0,0,0.2);
+    }
+
+    /* Better spacing for time grid */
+    .vue-journee .time-grid {
+        font-size: 9px;
+    }
+
+    /* Ensure consistent sizing for all day cells */
+    .vue-journee .day-cell {
+        padding: 8px !important;
+        box-sizing: border-box !important;
+        border: 1px solid #666 !important;
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
 }
 /* Enable drop-through on operations when dragging */
 body.dragging-active .operation-slot:not(.dragging) {

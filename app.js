@@ -158,6 +158,9 @@ let draggedOperation = null;
 // Global orders array (loaded from CSV)
 let commandes = [];
 
+// Print mode flag
+let isPrintMode = false;
+
 // System Events (Maintenance/Closures)
 let systemEvents = [];
 
@@ -2050,33 +2053,51 @@ function renderVueJournee() {
         </div>
     `;
 
-    // Day headers
-    html += '<div class="day-headers">';
-    html += '<div class="day-header-cell machine-col">Machine</div>';
-    DAYS_OF_WEEK.forEach((day, index) => {
-        const capacity = HOURS_PER_DAY[day];
-        const timeRange = day === 'Vendredi' ? '07h-12h' : '07h30-16h30';
-        
-        // Calculer la date pour ce jour
-        const dateObj = getDateFromWeekDay(semaineSelectionnee, day, "00:00", anneeSelectionnee);
-        const dayNum = dateObj.getDate().toString().padStart(2, '0');
-        const monthNum = (dateObj.getMonth() + 1).toString().padStart(2, '0');
-        const formattedDate = `${dayNum}/${monthNum}`;
+    // Function to generate day headers
+    const generateDayHeaders = () => {
+        let headersHtml = '<div class="day-headers">';
+        headersHtml += '<div class="day-header-cell machine-col">Machine</div>';
+        DAYS_OF_WEEK.forEach((day, index) => {
+            const capacity = HOURS_PER_DAY[day];
+            const timeRange = day === 'Vendredi' ? '07h-12h' : '07h30-16h30';
 
-        html += `
-            <div class="day-header-cell day-col ${day === 'Vendredi' ? 'friday' : ''}">
-                <div class="day-name">${day} <span style="font-weight: normal; opacity: 0.8; font-size: 0.9em;">${formattedDate}</span></div>
-                <div class="day-capacity">${timeRange} (${capacity}h)</div>
-            </div>
-        `;
-    });
-    html += '</div>';
+            // Calculer la date pour ce jour
+            const dateObj = getDateFromWeekDay(semaineSelectionnee, day, "00:00", anneeSelectionnee);
+            const dayNum = dateObj.getDate().toString().padStart(2, '0');
+            const monthNum = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+            const formattedDate = `${dayNum}/${monthNum}`;
+
+            headersHtml += `
+                <div class="day-header-cell day-col ${day === 'Vendredi' ? 'friday' : ''}">
+                    <div class="day-name">${day} <span style="font-weight: normal; opacity: 0.8; font-size: 0.9em;">${formattedDate}</span></div>
+                    <div class="day-capacity">${timeRange} (${capacity}h)</div>
+                </div>
+            `;
+        });
+        headersHtml += '</div>';
+        return headersHtml;
+    };
+
+    // Day headers (shown once in normal mode, repeated per machine in print mode)
+    if (!isPrintMode) {
+        html += generateDayHeaders();
+    }
 
     // Rows for each machine
     ALL_MACHINES.forEach(machine => {
-        html += '<div class="journee-row">';
+        // In print mode, create two rows per machine (top half and bottom half)
+        const rowsToPrint = isPrintMode ? ['print-row-top', 'print-row-bottom'] : [''];
 
-        html += `<div class="machine-cell"><div class="machine-name">${machine}</div></div>`;
+        rowsToPrint.forEach((printClass, rowIndex) => {
+            // In print mode, show headers before each row (matin and après-midi)
+            if (isPrintMode) {
+                html += generateDayHeaders();
+            }
+
+            html += `<div class="journee-row ${printClass}">`;
+
+            const machineSuffix = isPrintMode ? (rowIndex === 0 ? ' - MATIN' : ' - APRÈS-MIDI') : '';
+            html += `<div class="machine-cell"><div class="machine-name">${machine}${machineSuffix}</div></div>`;
 
         // Day cells with hourly time slots
         DAYS_OF_WEEK.forEach(day => {
@@ -2327,10 +2348,11 @@ function renderVueJournee() {
                     <!-- Old footer removed -->
                 </div>
             `;
-        });
+        }); // Close DAYS_OF_WEEK.forEach
 
-        html += '</div>';
-    });
+            html += '</div>'; // Close journee-row
+        }); // Close rowsToPrint.forEach
+    }); // Close ALL_MACHINES.forEach
 
     html += '</div>';
     container.innerHTML = html;
@@ -6678,35 +6700,64 @@ document.getElementById('btnConfirmPrint')?.addEventListener('click', handlePrin
 function showPrintConfig() {
     const modal = document.getElementById('modalPrintConfig');
     const select = document.getElementById('printWeekSelect');
-    
+
     // Populate weeks (Current - 1 to Current + 4)
     select.innerHTML = '';
     const currentW = getWeekNumber(new Date());
+    const currentYear = new Date().getFullYear();
+
     for (let i = -1; i <= 4; i++) {
-        const w = currentW + i;
-        const range = getWeekDateRange(w);
+        let w = currentW + i;
+        let year = currentYear;
+
+        // Handle year rollover
+        if (w > 52) {
+            w = w - 52;
+            year++;
+        } else if (w < 1) {
+            w = w + 52;
+            year--;
+        }
+
+        const range = getWeekDateRange(w, year);
         const option = document.createElement('option');
-        option.value = w;
-        option.text = `Semaine ${w} (${range.start}-${range.end} ${range.month})`;
-        if (w === semaineSelectionnee) option.selected = true;
+        option.value = `${w}|${year}`; // Store both week and year
+        option.text = `Semaine ${w} ${year} (${range.start}-${range.end} ${range.month})`;
+        if (w === semaineSelectionnee && year === anneeSelectionnee) option.selected = true;
         select.appendChild(option);
     }
-    
+
     modal.classList.add('active');
 }
 
 function handlePrint() {
-    const week = parseInt(document.getElementById('printWeekSelect').value);
+    const selectedValue = document.getElementById('printWeekSelect').value;
+    const [week, year] = selectedValue.split('|').map(v => parseInt(v));
     const format = document.querySelector('input[name="printFormat"]:checked').value;
-    
-    // 1. Switch View
+
+    // 1. Switch View with correct week and year
     semaineSelectionnee = week;
+    anneeSelectionnee = year;
+
+    // 2. Enable print mode for dual-row rendering (only for journee view)
+    if (format === 'journee') {
+        isPrintMode = true;
+    }
+
     toggleVue(format); // 'semaine' or 'journee'
-    
-    // 2. Wait for render then Print
+
+    // 3. Wait for render then Print
     setTimeout(() => {
         document.getElementById('modalPrintConfig').classList.remove('active');
         window.print();
+
+        // 4. Disable print mode and re-render after printing
+        setTimeout(() => {
+            isPrintMode = false;
+            if (format === 'journee') {
+                renderVueJournee();
+            }
+        }, 100);
     }, 500);
 }
 

@@ -5,7 +5,7 @@
 // Configuration
 const MACHINES = {
     cisailles: ['Cisaille A', 'Cisaille B'],
-    poinconneuses: ['Poinçonneuse A', 'Poinçonneuse B'],
+    poinconneuses: ['Poinçonneuse M', 'Poinçonneuse T'],
     plieuses: ['Plieuse Lo', 'Plieuse Mik', 'Plieuse Mok']
 };
 
@@ -166,6 +166,38 @@ let currentSearchQuery = '';
 
 // System Events (Maintenance/Closures)
 let systemEvents = [];
+
+// Migration automatique des noms de machines
+function migrateMachineNames() {
+    const MIGRATION_MAP = {
+        'Poinçonneuse A': 'Poinçonneuse M',
+        'Poinçonneuse B': 'Poinçonneuse T'
+    };
+
+    let migrationCount = 0;
+
+    commandes.forEach(commande => {
+        if (!commande.operations) return;
+
+        commande.operations.forEach(operation => {
+            if (!operation.slots) return;
+
+            operation.slots.forEach(slot => {
+                if (MIGRATION_MAP[slot.machine]) {
+                    console.log(`Migration: ${slot.machine} → ${MIGRATION_MAP[slot.machine]} (commande ${commande.id})`);
+                    slot.machine = MIGRATION_MAP[slot.machine];
+                    migrationCount++;
+                }
+            });
+        });
+    });
+
+    if (migrationCount > 0) {
+        console.log(`✅ Migration terminée: ${migrationCount} slots mis à jour`);
+        return true;
+    }
+    return false;
+}
 
 
 // ===================================
@@ -3585,6 +3617,12 @@ class DataSyncManager {
                     console.log(`✅ Loaded ${commandes.length} orders from Local Storage.`);
                     this.updateSyncIndicator('offline', 'Données locales');
                     refresh();
+
+                    // Migration des noms de machines si nécessaire
+                    if (migrateMachineNames()) {
+                        this.saveLocalData();
+                        Toast.info('Noms de machines mis à jour');
+                    }
                 }
             } else {
                 console.log('ℹ️ No local data found. Waiting for Google Sheets sync...');

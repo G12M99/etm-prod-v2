@@ -161,6 +161,9 @@ let commandes = [];
 // Print mode flag
 let isPrintMode = false;
 
+// Sidebar search query
+let currentSearchQuery = '';
+
 // System Events (Maintenance/Closures)
 let systemEvents = [];
 
@@ -2420,8 +2423,9 @@ function renderVueJournee() {
 
 /**
  * Render unplaced orders
+ * @param {string} searchQuery - Optional search query to filter commands
  */
-function renderCommandesNonPlacees() {
+function renderCommandesNonPlacees(searchQuery = '') {
     const container = document.getElementById('unplacedOrdersContainer');
     const unplacedOrders = getUnplacedOrders();
 
@@ -2436,15 +2440,37 @@ function renderCommandesNonPlacees() {
         return dateA - dateB;
     });
 
+    // Apply search filter if query exists
+    let filteredOrders = unplacedOrders;
+    if (searchQuery && searchQuery.trim() !== '') {
+        filteredOrders = filterCommandesBySearch(unplacedOrders, searchQuery);
+        updateSearchResultCount(filteredOrders.length, unplacedOrders.length);
+    }
+
     if (unplacedOrders.length === 0) {
         container.innerHTML = '<p class="no-orders">Aucune commande à placer</p>';
+        return;
+    }
+
+    // Check if search returned no results
+    if (searchQuery && searchQuery.trim() !== '' && filteredOrders.length === 0) {
+        container.innerHTML = `
+            <div class="no-search-results">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
+                    <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <p>Aucun résultat pour <span class="search-term">"${escapeHtml(searchQuery)}"</span></p>
+                <p style="margin-top: 8px; font-size: 12px;">Essayez un autre terme de recherche</p>
+            </div>
+        `;
         return;
     }
 
     let html = '';
     let cardsRendered = 0;
 
-    unplacedOrders.forEach(cmd => {
+    filteredOrders.forEach(cmd => {
         const urgencyLevel = getUrgencyLevel(cmd.dateLivraison);
         const livraison = new Date(cmd.dateLivraison);
         const daysUntil = Math.ceil((livraison - currentTime) / (1000 * 60 * 60 * 24));
@@ -2531,6 +2557,116 @@ function renderCommandesNonPlacees() {
             op.addEventListener('dragend', handleDragEnd);
         });
     }
+}
+
+/**
+ * Filter commands based on search query
+ * @param {Array} commands - Array of command objects
+ * @param {string} searchQuery - Search term
+ * @returns {Array} Filtered commands
+ */
+function filterCommandesBySearch(commands, searchQuery) {
+    if (!searchQuery || searchQuery.trim() === '') {
+        return commands;
+    }
+
+    const query = searchQuery.toLowerCase().trim();
+
+    return commands.filter(cmd => {
+        // Search in command ID
+        const matchesId = cmd.id && cmd.id.toLowerCase().includes(query);
+
+        // Search in client name
+        const matchesClient = cmd.client && cmd.client.toLowerCase().includes(query);
+
+        return matchesId || matchesClient;
+    });
+}
+
+/**
+ * Update search result count display
+ * @param {number} matchCount - Number of matching commands
+ * @param {number} totalCount - Total number of commands
+ */
+function updateSearchResultCount(matchCount, totalCount) {
+    const countElement = document.getElementById('searchResultCount');
+
+    if (!countElement) return;
+
+    if (matchCount === totalCount) {
+        countElement.style.display = 'none';
+    } else {
+        countElement.style.display = 'block';
+        countElement.textContent = `${matchCount} résultat${matchCount > 1 ? 's' : ''} sur ${totalCount}`;
+    }
+}
+
+/**
+ * Escape HTML to prevent XSS
+ * @param {string} text - Text to escape
+ * @returns {string} Escaped HTML
+ */
+function escapeHtml(text) {
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, m => map[m]);
+}
+
+/**
+ * Initialize sidebar search functionality
+ */
+function initializeSidebarSearch() {
+    const searchInput = document.getElementById('sidebarSearchInput');
+    const clearBtn = document.getElementById('clearSidebarSearch');
+
+    if (!searchInput || !clearBtn) {
+        console.warn('Sidebar search elements not found');
+        return;
+    }
+
+    // Search on input (debounced for performance)
+    let searchTimeout;
+    searchInput.addEventListener('input', (e) => {
+        const query = e.target.value;
+
+        // Show/hide clear button
+        clearBtn.style.display = query ? 'flex' : 'none';
+
+        // Update global search query
+        currentSearchQuery = query;
+
+        // Debounce search for performance
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            renderCommandesNonPlacees(query);
+        }, 150); // 150ms debounce
+    });
+
+    // Clear search
+    clearBtn.addEventListener('click', () => {
+        searchInput.value = '';
+        clearBtn.style.display = 'none';
+        currentSearchQuery = '';
+        document.getElementById('searchResultCount').style.display = 'none';
+        renderCommandesNonPlacees('');
+        searchInput.focus();
+    });
+
+    // Clear on Escape key
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            searchInput.value = '';
+            clearBtn.style.display = 'none';
+            currentSearchQuery = '';
+            document.getElementById('searchResultCount').style.display = 'none';
+            renderCommandesNonPlacees('');
+        }
+    });
 }
 
 /**
@@ -3038,7 +3174,7 @@ function handleDrop(e) {
         }
 
         renderVueJournee();
-        renderCommandesNonPlacees(); // Update sidebar
+        renderCommandesNonPlacees(currentSearchQuery || ''); // Update sidebar
         saveData();
         Toast.success(`Opération déplacée et regroupée à ${gapStart}`);
     } else {
@@ -4239,7 +4375,7 @@ function refresh() {
     } else if (vueActive === 'liste') {
         renderVueListe();
     }
-    renderCommandesNonPlacees();
+    renderCommandesNonPlacees(currentSearchQuery || '');
     updateCurrentTime();
 }
 
@@ -6794,7 +6930,7 @@ async function init() {
         // Refresh views if needed (and not dragging)
         if (!draggedOperation) {
             // Update sidebar urgency
-            renderCommandesNonPlacees();
+            renderCommandesNonPlacees(currentSearchQuery || '');
 
             // Update Day View (Red Line)
             if (vueActive === 'journee') {
@@ -6831,6 +6967,9 @@ async function init() {
     console.log(`✅ Commandes actives: ${getActiveOrders().length}/${commandes.length}`);
     console.log(`📦 Commandes placées: ${getPlacedOrders().length}`);
     console.log(`⏳ Commandes non placées: ${getUnplacedOrders().length}`);
+
+    // Initialize sidebar search
+    initializeSidebarSearch();
 
     console.log('✅ Application V2 initialisée avec sync hybride');
 }

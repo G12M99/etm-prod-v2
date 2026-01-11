@@ -344,6 +344,28 @@
         </div>
     </div>
 
+    <!-- Modal: Overtime Confirmation -->
+    <div class="modal" id="modalOvertimeConfirm">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Confirmation Heures Supplémentaires</h2>
+            </div>
+            <div class="modal-body">
+                <div id="overtimeConfirmContent" style="line-height: 1.6;">
+                    <!-- Rempli dynamiquement par JS -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnRefuseOvertime">
+                     Refuser ❌
+                </button>
+                <button class="btn btn-primary" id="btnAcceptOvertime">
+                     Accepter heures sup ✅
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal: System Events (Maintenance/Closures) -->
     <div class="modal" id="modalSystemEvents">
         <div class="modal-content" style="max-width: 800px;">
@@ -373,11 +395,11 @@
                         </div>
                         <div class="form-group">
                             <label>Date de Début</label>
-                            <input type="date" id="sysDateStart" class="form-control">
+                            <input type="date" id="sysDateStart" class="form-control" onchange="updateFullLastDayVisibility()">
                         </div>
                         <div class="form-group">
                             <label>Date de Fin (inclus)</label>
-                            <input type="date" id="sysDateEnd" class="form-control">
+                            <input type="date" id="sysDateEnd" class="form-control" onchange="updateFullLastDayVisibility()">
                         </div>
                         <div class="form-group">
                             <label>Heure Début</label>
@@ -386,6 +408,12 @@
                         <div class="form-group">
                             <label>Heure Fin</label>
                             <input type="time" id="sysEnd" class="form-control" value="16:30">
+                        </div>
+                        <div class="form-group" id="fullLastDayGroup" style="display: none; grid-column: span 2;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="sysFullLastDay">
+                                Dernier jour complet (jusqu'aux heures supp)
+                            </label>
                         </div>
                         <div class="form-group" style="grid-column: span 2;">
                             <label>Raison (Optionnel)</label>
@@ -407,7 +435,7 @@
                                 <th>Cible</th>
                                 <th>Période</th>
                                 <th>Raison</th>
-                                <th>Action</th>
+                                <th style="width: 160px;">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="systemEventsList">

@@ -1185,6 +1185,35 @@ function calculateEndTimeWithLunch(startDec, duration, day) {
     return tentativeEnd;
 }
 
+/**
+ * Détecte si une opération déborde sur les heures supplémentaires
+ * @param {number} startDec - Heure de début en décimal (ex: 15.5 = 15:30)
+ * @param {number} duration - Durée de l'opération en heures
+ * @param {string} day - Jour de la semaine
+ * @returns {object} Informations sur le débordement
+ */
+function detectOvertimeOverflow(startDec, duration, day) {
+    const schedule = getScheduleForDay(day);
+    const normalEnd = schedule.standardEnd; // 16.5 ou 12.0
+    const operationEnd = calculateEndTimeWithLunch(startDec, duration, day);
+
+    if (operationEnd <= normalEnd) {
+        return { overflows: false, normalEnd, operationEnd };
+    }
+
+    const overtimeNeeded = operationEnd - normalEnd;
+    const overtimeEnd = schedule.overtimeEnd; // 18.0 ou 14.0
+
+    return {
+        overflows: true,
+        normalEnd: normalEnd,
+        operationEnd: operationEnd,
+        overtimeNeeded: overtimeNeeded,
+        canFitWithOvertime: operationEnd <= overtimeEnd,
+        exceedsDay: operationEnd > overtimeEnd
+    };
+}
+
 function findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeStr = null, allowOvertime = false, year = null) {
     const targetYear = year || (typeof anneeSelectionnee !== 'undefined' ? anneeSelectionnee : new Date().getFullYear());
     const placedOrders = getPlacedOrders();
@@ -1205,13 +1234,13 @@ function findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeSt
             end: timeToDecimalHours(slot.heureFin)
         }));
 
-    // Add System Events (Maintenance or Factory Closures)
-    systemEvents
+    // Add System Events (Maintenance or Factory Closures) - utilise les événements expansés pour supporter v2
+    getExpandedSystemEvents()
         .filter(e => {
             if ((e.machine !== machine && e.machine !== 'ALL') || e.day !== jour || e.week !== semaine) return false;
 
-            // 🔒 CRITICAL: Filter by year to avoid showing events from different years
-            const eventYear = getISOWeekYear(e.dateStr);
+            // Filter by year to avoid showing events from different years
+            const eventYear = e.year || getISOWeekYear(e.dateStr);
             return eventYear === targetYear;
         })
         .forEach(e => {
@@ -1370,13 +1399,13 @@ function findNextGap(machine, jour, semaine, minTimeStr = null, year = anneeSele
         };
     });
 
-    // Add System Events (Maintenance or Factory Closures)
-    systemEvents
+    // Add System Events (Maintenance or Factory Closures) - utilise les événements expansés pour supporter v2
+    getExpandedSystemEvents()
         .filter(e => {
             if ((e.machine !== machine && e.machine !== 'ALL') || e.day !== jour || e.week !== semaine) return false;
 
-            // 🔒 CRITICAL: Filter by year to avoid showing events from different years
-            const eventYear = getISOWeekYear(e.dateStr);
+            // Filter by year to avoid showing events from different years
+            const eventYear = e.year || getISOWeekYear(e.dateStr);
             return eventYear === year;
         })
         .forEach(e => {
@@ -1998,21 +2027,22 @@ function renderVueSemaine() {
                 `;
             });
 
-            // Display System Events (Maintenance/Closure)
-            const weekEvents = systemEvents.filter(e => {
+            // Display System Events (Maintenance/Closure) - utilise les événements expansés pour supporter v2
+            const expandedEvents = getExpandedSystemEvents();
+            const weekEvents = expandedEvents.filter(e => {
                 if ((e.machine !== machine && e.machine !== 'ALL') || e.week !== item.week) return false;
 
-                // 🔒 CRITICAL: Filter by year to avoid showing events from different years
-                const eventYear = getISOWeekYear(e.dateStr);
+                // Filter by year to avoid showing events from different years
+                const eventYear = e.year || getISOWeekYear(e.dateStr);
                 return eventYear === item.year;
             });
 
             weekEvents.forEach(e => {
                 const label = e.type === 'fermeture' ? 'FERMÉ' : 'MAINT';
-                const style = e.type === 'fermeture' 
-                    ? 'background:#f8d7da; color:#721c24; border:1px solid #f5c6cb;' 
+                const style = e.type === 'fermeture'
+                    ? 'background:#f8d7da; color:#721c24; border:1px solid #f5c6cb;'
                     : 'background:#fff3cd; color:#856404; border:1px solid #ffeeba;';
-                
+
                 html += `
                     <span class="command-badge system-event-badge" style="${style} display:block; margin-top:2px; font-weight:bold;">
                         <span class="badge-id" style="width:100%; text-align:center;">${label}</span>
@@ -2256,13 +2286,13 @@ function renderVueJournee() {
             // Overlay operations with absolute positioning
             html += '<div class="operations-overlay">';
 
-            // 0. Add System Events (Maintenance / Closure)
-            systemEvents
+            // 0. Add System Events (Maintenance / Closure) - utilise les événements expansés pour supporter v2
+            getExpandedSystemEvents()
                 .filter(e => {
                     if ((e.machine !== machine && e.machine !== 'ALL') || e.day !== day || e.week !== semaineSelectionnee) return false;
 
-                    // 🔒 CRITICAL: Filter by year to avoid showing events from different years
-                    const eventYear = getISOWeekYear(e.dateStr);
+                    // Filter by year to avoid showing events from different years
+                    const eventYear = e.year || getISOWeekYear(e.dateStr);
                     return eventYear === anneeSelectionnee;
                 })
                 .forEach(e => {
@@ -3035,7 +3065,7 @@ function formatDecimalTime(decimalTime) {
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
 }
 
-function handleDrop(e) {
+async function handleDrop(e) {
     e.preventDefault();
     e.currentTarget.classList.remove('drag-over');
     document.body.classList.remove('dragging-active'); // CRITICAL: Ensure class is removed even if re-render happens
@@ -3088,9 +3118,14 @@ function handleDrop(e) {
     }
 
     // 3. Strategy Selection: Merge vs Split
-    // Check if we can fit the WHOLE operation (merge) at the target, 
+    // Check if we can fit the WHOLE operation (merge) at the target,
     // or if we must only move the specific chunk (split).
-    
+
+    // Détecter si opération multi-fragments → tentative de fusion
+    if (operation.slots.length > 1) {
+        console.log(`🔗 Opération multi-fragments détectée (${operation.slots.length} parties) → tentative de fusion`);
+    }
+
     let durationToPlace = operation.dureeTotal;
     let mergeMode = false;
 
@@ -3176,6 +3211,91 @@ function handleDrop(e) {
         const startDec = parseInt(startParts[0]) + parseInt(startParts[1])/60;
         const endDec = calculateEndTimeWithLunch(startDec, operation.dureeTotal, searchDay);
 
+        // ===== VALIDATION HEURES SUPPLÉMENTAIRES =====
+        const overtimeCheck = detectOvertimeOverflow(startDec, operation.dureeTotal, searchDay);
+
+        if (overtimeCheck.overflows) {
+            // Vérifier si dépasse même avec heures sup
+            if (overtimeCheck.exceedsDay) {
+                operation.slots = slotsBackup;
+                restoreAndAlert(`⛔ IMPOSSIBLE : L'opération dépasse la journée entière (même avec heures sup). Utilisez le placement automatique pour scindage multi-jours.`);
+                return;
+            }
+
+            // Vérifier limites heures sup
+            const machineOvertimeUsed = overtimeTracker.byMachine[targetMachine]?.hours || 0;
+            const weeklyOvertimeUsed = overtimeTracker.totalHoursUsed || 0;
+
+            const canUseOvertime = (
+                machineOvertimeUsed + overtimeCheck.overtimeNeeded <= 2 && // Max 2h/jour
+                weeklyOvertimeUsed + overtimeCheck.overtimeNeeded <= 10    // Max 10h/semaine
+            );
+
+            if (!canUseOvertime) {
+                operation.slots = slotsBackup;
+                restoreAndAlert(`⛔ IMPOSSIBLE : Limites heures supplémentaires atteintes (max 2h/jour, 10h/semaine).`);
+                return;
+            }
+
+            // Afficher confirmation
+            const confirmResult = await showOvertimeConfirmDialog({
+                type: operation.type,
+                machine: targetMachine,
+                day: searchDay,
+                normalDuration: operation.dureeTotal - overtimeCheck.overtimeNeeded,
+                overtimeDuration: overtimeCheck.overtimeNeeded,
+                totalDuration: operation.dureeTotal
+            });
+
+            if (confirmResult === 'refuse') {
+                // Scinder à la limite des heures normales
+                const fragments = splitAtNormalHoursEnd(
+                    operation,
+                    targetMachine,
+                    searchWeek,
+                    searchYear,
+                    searchDay,
+                    startDec
+                );
+
+                // Créer les slots pour chaque fragment
+                operation.slots = fragments.map(frag => ({
+                    machine: frag.machine,
+                    duree: frag.duration,
+                    semaine: frag.week,
+                    annee: frag.year,
+                    jour: frag.day,
+                    heureDebut: formatDecimalTime(frag.startHour),
+                    heureFin: formatDecimalTime(frag.endHour),
+                    dateDebut: getDateFromWeekDay(frag.week, frag.day, formatDecimalTime(frag.startHour), frag.year).toISOString(),
+                    dateFin: getDateFromWeekDay(frag.week, frag.day, formatDecimalTime(frag.endHour), frag.year).toISOString(),
+                    overtime: frag.startHour >= (frag.day === 'Vendredi' ? 12 : 16.5)
+                }));
+
+                operation.statut = "Planifiée";
+                const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
+                cmd.statut = allPlaced ? "Planifiée" : "En cours";
+
+                if (typeof replanifierOperationsSuivantes === 'function') {
+                    replanifierOperationsSuivantes(cmd, operation);
+                }
+
+                renderVueJournee();
+                renderCommandesNonPlacees(currentSearchQuery || '');
+                saveData();
+                Toast.info(`Opération scindée en ${fragments.length} partie(s) (heures sup refusées)`);
+                return;
+            }
+
+            // Accepté → tracker heures sup
+            if (!overtimeTracker.byMachine[targetMachine]) {
+                overtimeTracker.byMachine[targetMachine] = { hours: 0 };
+            }
+            overtimeTracker.byMachine[targetMachine].hours += overtimeCheck.overtimeNeeded;
+            overtimeTracker.totalHoursUsed += overtimeCheck.overtimeNeeded;
+        }
+        // ===== FIN VALIDATION HEURES SUPPLÉMENTAIRES =====
+
         // Successor check on the final calculated end time
         if (endDec > successorMaxDecimal + 0.001) {
              operation.slots = slotsBackup;
@@ -3208,7 +3328,14 @@ function handleDrop(e) {
         renderVueJournee();
         renderCommandesNonPlacees(currentSearchQuery || ''); // Update sidebar
         saveData();
-        Toast.success(`Opération déplacée et regroupée à ${gapStart}`);
+
+        // Message différent si fusion automatique ou simple déplacement
+        const wasMultiFragment = slotsBackup.length > 1;
+        if (wasMultiFragment) {
+            Toast.success(`Opération fusionnée en un seul bloc à ${gapStart}`);
+        } else {
+            Toast.success(`Opération déplacée à ${gapStart}`);
+        }
     } else {
         operation.slots = slotsBackup;
         restoreAndAlert(`Impossible de déplacer l'opération : pas de créneau contigu de ${formatHours(operation.dureeTotal)} trouvé.`);
@@ -3229,7 +3356,7 @@ function handleDrop(e) {
 /**
  * Automatically place an order
  */
-function placerAutomatiquement(commandeId) {
+async function placerAutomatiquement(commandeId) {
     const cmd = commandes.find(c => c.id === commandeId);
     if (!cmd) return;
 
@@ -3353,20 +3480,17 @@ function placerAutomatiquement(commandeId) {
                     );
 
                     if (canUseOvertime && overtimeNeeded > 0.25) {
-                        const remainingAfterOvertime = remainingDuration - placedDuration - overtimeNeeded;
-                        const overtimeMessage = `⏰ HEURES SUPPLÉMENTAIRES NÉCESSAIRES\n\n` +
-                            `Opération: ${operation.type}\n` +
-                            `Machine: ${assignedMachine}\n` +
-                            `Jour: ${bestSlot.day}\n\n` +
-                            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                            `✅ Temps placé aujourd'hui: ${formatHours(placedDuration)}\n` +
-                            `⏰ Heures sup proposées: ${formatHours(overtimeNeeded)}\n` +
-                            (remainingAfterOvertime > 0.01 ? `📅 Suite demain: ${formatHours(remainingAfterOvertime)}\n` : `✓ Opération terminée après heures sup\n`) +
-                            `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                            `➡️ Cliquez OK pour ACCEPTER les heures supplémentaires\n` +
-                            `➡️ Cliquez ANNULER pour REFUSER (suite demain)`;
+                        // Afficher modale de confirmation pour heures sup
+                        const confirmResult = await showOvertimeConfirmDialog({
+                            type: operation.type,
+                            machine: assignedMachine,
+                            day: bestSlot.day,
+                            normalDuration: placedDuration,
+                            overtimeDuration: overtimeNeeded,
+                            totalDuration: placedDuration + overtimeNeeded
+                        });
 
-                        if (confirm(overtimeMessage)) {
+                        if (confirmResult === 'accept') {
                             useOvertime = true;
                             placedDuration += overtimeNeeded;
 
@@ -3582,6 +3706,62 @@ const Toast = {
 };
 
 // ===================================
+// Overtime Confirmation Dialog
+// ===================================
+
+/**
+ * Affiche une modale de confirmation pour les heures supplémentaires
+ * @param {object} operationInfo - Informations sur l'opération
+ * @returns {Promise<string>} 'accept' ou 'refuse'
+ */
+function showOvertimeConfirmDialog(operationInfo) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('modalOvertimeConfirm');
+        const content = document.getElementById('overtimeConfirmContent');
+        const btnAccept = document.getElementById('btnAcceptOvertime');
+        const btnRefuse = document.getElementById('btnRefuseOvertime');
+
+        // Construire le message
+        content.innerHTML = `
+            <p><strong>Opération :</strong> ${operationInfo.type}</p>
+            <p><strong>Machine :</strong> ${operationInfo.machine}</p>
+            <p><strong>Jour :</strong> ${operationInfo.day}</p>
+            <hr>
+            <p><strong>Durée totale :</strong> ${formatHours(operationInfo.totalDuration)}</p>
+            <p><strong>Heures normales :</strong> ${formatHours(operationInfo.normalDuration)}</p>
+            <p style="color: #fd7e14;"><strong>Heures supplémentaires :</strong> ${formatHours(operationInfo.overtimeDuration)}</p>
+            <hr>
+            <p style="font-size: 0.9em; color: #666;">
+                Si vous refusez, l'opération sera scindée à ${operationInfo.day === 'Vendredi' ? '12:00' : '16:30'}
+                et continuera le lendemain.
+            </p>
+        `;
+
+        // Event handlers
+        const handleAccept = () => {
+            cleanup();
+            resolve('accept');
+        };
+
+        const handleRefuse = () => {
+            cleanup();
+            resolve('refuse');
+        };
+
+        const cleanup = () => {
+            btnAccept.removeEventListener('click', handleAccept);
+            btnRefuse.removeEventListener('click', handleRefuse);
+            modal.style.display = 'none';
+        };
+
+        btnAccept.addEventListener('click', handleAccept);
+        btnRefuse.addEventListener('click', handleRefuse);
+
+        modal.style.display = 'flex';
+    });
+}
+
+// ===================================
 // Data Sync Manager (Hybrid Architecture)
 // ===================================
 
@@ -3638,25 +3818,37 @@ class DataSyncManager {
 
     cleanupPastSystemEvents() {
         const now = new Date();
-        const currentWeek = getWeekNumber(now);
-        
+
+        // Calculer la date limite (3 semaines en arrière)
+        const threeWeeksAgo = new Date(now);
+        threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 21);
+        const limitDateStr = threeWeeksAgo.toISOString().split('T')[0];
+
         systemEvents = systemEvents.filter(event => {
+            // === FORMAT V2 (multi-jours) ===
+            if (isMultiDayEvent(event)) {
+                // Garder si dateEnd >= date limite (3 semaines en arrière)
+                return event.dateEnd >= limitDateStr;
+            }
+
+            // === FORMAT V1 (ancien) ===
+            if (event.dateStr) {
+                return event.dateStr >= limitDateStr;
+            }
+
+            // Fallback sur l'ancienne logique par semaine pour très vieux événements
+            const currentWeek = getWeekNumber(now);
             let evtW = event.week;
             const curW = currentWeek;
 
-            // Handle year wrap-around (e.g. Current 50, Event 2 -> Future)
-            if (curW > 40 && evtW < 10) {
-                evtW += 52; 
-            }
-            // Handle reverse wrap-around (e.g. Current 2, Event 50 -> Past)
-            else if (curW < 10 && evtW > 40) {
-                 evtW -= 52; 
-            }
+            if (curW > 40 && evtW < 10) evtW += 52;
+            else if (curW < 10 && evtW > 40) evtW -= 52;
 
-            // Keep events from previous week (-1 buffer) and all future
-            if (evtW >= curW - 1) return true;
-            return false;
+            // Garder si semaine >= currentWeek - 3
+            return evtW >= curW - 3;
         });
+
+        saveSystemEvents();
     }
 
     // Méthode 3: Sync avec Google Sheets
@@ -3881,27 +4073,162 @@ function loadSystemEvents() {
     }
 }
 
+// ===================================
+// System Events v2 - Utility Functions
+// ===================================
+
+// Variable pour le mode édition
+let editingEventId = null;
+
+/**
+ * Détecter si un événement est au format multi-jours (v2)
+ */
+function isMultiDayEvent(event) {
+    return event.version === 2 || event.dateStart !== undefined;
+}
+
+/**
+ * Compter les jours ouvrables entre deux dates
+ */
+function countWorkingDays(startDate, endDate) {
+    let count = 0;
+    let current = new Date(startDate);
+    const end = new Date(endDate);
+    while (current <= end) {
+        const dayIdx = current.getDay();
+        if (dayIdx !== 0 && dayIdx !== 6) count++;
+        current.setDate(current.getDate() + 1);
+    }
+    return count;
+}
+
+/**
+ * Calculer les horaires effectifs pour un jour donné dans un événement multi-jours
+ */
+function getEffectiveHoursForDay(event, targetDateStr, dayName) {
+    const isFirstDay = (targetDateStr === event.dateStart);
+    const isLastDay = (targetDateStr === event.dateEnd);
+    const schedule = getScheduleForDay(dayName);
+
+    let effectiveStart, effectiveEnd;
+
+    if (isFirstDay && isLastDay) {
+        // Événement d'un seul jour : utiliser les heures spécifiées
+        effectiveStart = event.startTimeFirstDay;
+        effectiveEnd = event.endTimeLastDay;
+    } else if (isFirstDay) {
+        // Premier jour : début spécifié, fin = heures supp si fermeture
+        effectiveStart = event.startTimeFirstDay;
+        effectiveEnd = (event.type === 'fermeture')
+            ? decimalToTimeString(schedule.overtimeEnd)
+            : decimalToTimeString(schedule.standardEnd);
+    } else if (isLastDay) {
+        // Dernier jour : début normal, fin selon option fullLastDay
+        effectiveStart = decimalToTimeString(schedule.start);
+        if (event.fullLastDay) {
+            effectiveEnd = decimalToTimeString(schedule.overtimeEnd);
+        } else {
+            effectiveEnd = event.endTimeLastDay;
+        }
+    } else {
+        // Jour intermédiaire : horaires complets (avec heures supp si fermeture)
+        effectiveStart = decimalToTimeString(schedule.start);
+        effectiveEnd = (event.type === 'fermeture')
+            ? decimalToTimeString(schedule.overtimeEnd)
+            : decimalToTimeString(schedule.standardEnd);
+    }
+
+    return { effectiveStart, effectiveEnd };
+}
+
+/**
+ * Expanser un événement multi-jours en liste de jours individuels pour l'affichage
+ */
+function expandMultiDayEvent(event) {
+    if (!isMultiDayEvent(event)) {
+        return [event]; // Ancien format, retourner tel quel
+    }
+
+    const expanded = [];
+    let current = new Date(event.dateStart);
+    const endDate = new Date(event.dateEnd);
+    const dayNames = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+
+    while (current <= endDate) {
+        const dayIdx = current.getDay();
+        if (dayIdx !== 0 && dayIdx !== 6) { // Skip weekends
+            const currentStr = current.toISOString().split('T')[0];
+            const dayName = dayNames[dayIdx];
+            const { effectiveStart, effectiveEnd } = getEffectiveHoursForDay(event, currentStr, dayName);
+
+            expanded.push({
+                ...event,
+                _expanded: true,           // Marqueur interne
+                _parentId: event.id,       // Référence vers l'événement parent
+                dateStr: currentStr,
+                day: dayName,
+                week: getWeekNumber(current),
+                year: getISOWeekYear(current),
+                startTime: effectiveStart,
+                endTime: effectiveEnd
+            });
+        }
+        current.setDate(current.getDate() + 1);
+    }
+
+    return expanded;
+}
+
+/**
+ * Obtenir tous les événements expansés pour l'affichage dans le planning
+ */
+function getExpandedSystemEvents() {
+    return systemEvents.flatMap(e => expandMultiDayEvent(e));
+}
+
 function toggleMachineSelect() {
     const type = document.getElementById('sysEventType').value;
     const group = document.getElementById('sysMachineGroup');
     group.style.display = (type === 'fermeture') ? 'none' : 'block';
+    updateFullLastDayVisibility();
+}
+
+function updateFullLastDayVisibility() {
+    const dateStart = document.getElementById('sysDateStart').value;
+    const dateEnd = document.getElementById('sysDateEnd').value;
+    const type = document.getElementById('sysEventType').value;
+    const group = document.getElementById('fullLastDayGroup');
+    const checkbox = document.getElementById('sysFullLastDay');
+
+    // Afficher seulement si fermeture ET multi-jours
+    if (type === 'fermeture' && dateStart && dateEnd && dateStart !== dateEnd) {
+        group.style.display = 'block';
+    } else {
+        group.style.display = 'none';
+        if (checkbox) checkbox.checked = false;
+    }
 }
 
 // Make globally accessible for the onchange in HTML
 window.toggleMachineSelect = toggleMachineSelect;
+window.updateFullLastDayVisibility = updateFullLastDayVisibility;
 
 function openSystemEventsModal() {
     const modal = document.getElementById('modalSystemEvents');
     const machineSelect = document.getElementById('sysMachine');
-    
+
     // Populate machines
     machineSelect.innerHTML = ALL_MACHINES.map(m => `<option value="${m}">${m}</option>`).join('');
-    
+
     // Set default dates to Today
     const today = new Date().toISOString().split('T')[0];
     document.getElementById('sysDateStart').value = today;
     document.getElementById('sysDateEnd').value = today;
-    
+
+    // Réinitialiser le checkbox fullLastDay
+    document.getElementById('sysFullLastDay').checked = false;
+    updateFullLastDayVisibility();
+
     renderSystemEventsList();
     modal.classList.add('active');
 }
@@ -3909,100 +4236,82 @@ function openSystemEventsModal() {
 function addSystemEvent() {
     const type = document.getElementById('sysEventType').value;
     const machine = (type === 'fermeture') ? 'ALL' : document.getElementById('sysMachine').value;
-    const sDateVal = document.getElementById('sysDateStart').value;
-    const eDateVal = document.getElementById('sysDateEnd').value;
+    const dateStart = document.getElementById('sysDateStart').value;
+    const dateEnd = document.getElementById('sysDateEnd').value;
     const startTime = document.getElementById('sysStart').value;
     const endTime = document.getElementById('sysEnd').value;
     const reason = document.getElementById('sysReason').value || (type === 'maintenance' ? 'Maintenance' : 'Fermeture');
 
-    if (!sDateVal || !eDateVal || !startTime || !endTime) {
+    if (!dateStart || !dateEnd || !startTime || !endTime) {
         alert("Veuillez saisir les dates et les horaires.");
         return;
     }
 
-    const startDec = timeToDecimalHours(startTime);
-    const endDec = timeToDecimalHours(endTime);
-
-    if (endDec <= startDec) {
-        alert("L'heure de fin doit être après l'heure de début.");
-        return;
-    }
-
-    const startDate = new Date(sDateVal);
-    const endDate = new Date(eDateVal);
+    const startDate = new Date(dateStart);
+    const endDate = new Date(dateEnd);
 
     if (startDate > endDate) {
         alert("La date de fin doit être après la date de début.");
         return;
     }
 
-    const dayNames = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
-    let addedCount = 0;
-    let totalDisplaced = 0;
-    
-    // Loop through dates
-    let current = new Date(startDate);
-    while (current <= endDate) {
-        const dayIdx = current.getDay();
-        const dayName = dayNames[dayIdx];
-        
-        // Skip Weekends (Samedi=6, Dimanche=0) to avoid invisible events
-        if (dayIdx !== 0 && dayIdx !== 6) {
-            const weekNum = getWeekNumber(current);
-            const dateStr = current.toISOString().split('T')[0]; // Store YYYY-MM-DD
-            
-            // Smart Schedule Adjustment for Friday
-            let thisStart = startTime;
-            let thisEnd = endTime;
-
-            if (dayName === 'Vendredi') {
-                if (startTime === '07:30') thisStart = '07:00';
-                if (endTime === '16:30') thisEnd = '12:00';
-            }
-
-            const newEvent = {
-                id: 'SYS-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
-                type,
-                machine,
-                week: weekNum,
-                year: getISOWeekYear(current),
-                day: dayName,
-                dateStr: dateStr,
-                startTime: thisStart,
-                endTime: thisEnd,
-                reason
-            };
-            
-            // Check and resolve conflicts immediately
-            const displaced = resolveSystemEventConflicts(newEvent);
-            if (displaced > 0) totalDisplaced += displaced;
-
-            systemEvents.push(newEvent);
-            addedCount++;
+    // Validation horaire uniquement si même jour
+    if (dateStart === dateEnd) {
+        const startDec = timeToDecimalHours(startTime);
+        const endDec = timeToDecimalHours(endTime);
+        if (endDec <= startDec) {
+            alert("L'heure de fin doit être après l'heure de début.");
+            return;
         }
-        
-        // Next day
-        current.setDate(current.getDate() + 1);
     }
 
-    if (addedCount === 0) {
+    // Compter les jours ouvrables
+    const workingDaysCount = countWorkingDays(startDate, endDate);
+    if (workingDaysCount === 0) {
         alert("Aucun jour ouvrable (Lundi-Vendredi) dans la période sélectionnée.");
         return;
     }
 
+    // Créer UN SEUL événement multi-jours (format v2)
+    const fullLastDay = document.getElementById('sysFullLastDay').checked;
+    const newEvent = {
+        id: editingEventId || ('SYS-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5)),
+        version: 2,
+        type,
+        machine,
+        dateStart,
+        dateEnd,
+        startTimeFirstDay: startTime,
+        endTimeLastDay: endTime,
+        fullLastDay: fullLastDay,
+        reason,
+        createdAt: new Date().toISOString()
+    };
+
+    // Si mode édition, supprimer l'ancien événement
+    if (editingEventId) {
+        systemEvents = systemEvents.filter(e => e.id !== editingEventId);
+    }
+
+    // Résoudre les conflits avec les opérations existantes
+    const totalDisplaced = resolveSystemEventConflictsV2(newEvent);
+
+    systemEvents.push(newEvent);
     saveSystemEvents();
-    
     renderSystemEventsList();
     refresh();
-    
+
     if (totalDisplaced > 0) {
         alert(`⚠️ ${totalDisplaced} opération(s) ont été déplacées vers "Commandes à placer" suite à ce blocage.`);
+    } else if (editingEventId) {
+        Toast.success("Blocage modifié avec succès");
     } else {
-        Toast.success(`${addedCount} jour(s) bloqué(s)`);
+        Toast.success(`Blocage ajouté (${workingDaysCount} jour(s) ouvrable(s))`);
     }
-    
-    // Reset reason
-    document.getElementById('sysReason').value = '';
+
+    // Reset form et mode édition
+    editingEventId = null;
+    resetSystemEventForm();
 }
 
 /**
@@ -4057,6 +4366,85 @@ function resolveSystemEventConflicts(event) {
     return displacedCount;
 }
 
+/**
+ * Resolve conflicts for v2 multi-day events
+ * Returns count of displaced operations
+ */
+function resolveSystemEventConflictsV2(event) {
+    let displacedCount = 0;
+    const dayNames = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+
+    commandes.forEach(cmd => {
+        let cmdModified = false;
+
+        cmd.operations.forEach(op => {
+            if (!op.slots || op.slots.length === 0) return;
+
+            const hasConflict = op.slots.some(slot => {
+                // Machine check
+                if (event.machine !== 'ALL' && slot.machine !== event.machine) return false;
+
+                // Obtenir la date du slot
+                let slotDateStr;
+                if (slot.dateDebut) {
+                    slotDateStr = slot.dateDebut.split('T')[0];
+                } else {
+                    // Recalculer la date à partir de semaine/jour
+                    const slotDate = getDateFromWeekDay(slot.semaine, slot.jour, slot.heureDebut);
+                    slotDateStr = slotDate.toISOString().split('T')[0];
+                }
+
+                // Pour les événements v2 multi-jours
+                if (isMultiDayEvent(event)) {
+                    // Vérifier si le slot est dans la plage de dates
+                    if (slotDateStr < event.dateStart || slotDateStr > event.dateEnd) {
+                        return false;
+                    }
+
+                    // Calculer les horaires effectifs pour ce jour
+                    const { effectiveStart, effectiveEnd } = getEffectiveHoursForDay(
+                        event, slotDateStr, slot.jour
+                    );
+
+                    const eventStartDec = timeToDecimalHours(effectiveStart);
+                    const eventEndDec = timeToDecimalHours(effectiveEnd);
+                    const slotStart = timeToDecimalHours(slot.heureDebut);
+                    const slotEnd = timeToDecimalHours(slot.heureFin);
+
+                    return (slotStart < eventEndDec - 0.001) && (slotEnd > eventStartDec + 0.001);
+                }
+
+                // Pour les événements v1 (ancien format)
+                if (slot.semaine !== event.week) return false;
+                if (slot.jour !== event.day) return false;
+
+                const eventStart = timeToDecimalHours(event.startTime);
+                const eventEnd = timeToDecimalHours(event.endTime);
+                const slotStart = timeToDecimalHours(slot.heureDebut);
+                const slotEnd = timeToDecimalHours(slot.heureFin);
+
+                return (slotStart < eventEnd - 0.001) && (slotEnd > eventStart + 0.001);
+            });
+
+            if (hasConflict) {
+                op.slots = [];
+                op.statut = "Non placée";
+                op.progressionReelle = 0;
+                cmdModified = true;
+                displacedCount++;
+                console.log(`⚠️ Conflit détecté: Opération ${op.type} de ${cmd.id} retirée du planning.`);
+            }
+        });
+
+        if (cmdModified) {
+            const anyPlaced = cmd.operations.some(op => op.slots && op.slots.length > 0);
+            cmd.statut = anyPlaced ? "En cours" : "Non placée";
+        }
+    });
+
+    return displacedCount;
+}
+
 function deleteSystemEvent(id) {
     systemEvents = systemEvents.filter(e => e.id !== id);
     saveSystemEvents(); // Use standalone save
@@ -4067,42 +4455,197 @@ function deleteSystemEvent(id) {
 
 function renderSystemEventsList() {
     const container = document.getElementById('systemEventsList');
-    
-    if (systemEvents.length === 0) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+
+    // Filtrer : garder seulement les événements futurs ou en cours
+    const activeEvents = systemEvents.filter(e => {
+        if (isMultiDayEvent(e)) {
+            return e.dateEnd >= todayStr;
+        } else {
+            return e.dateStr >= todayStr;
+        }
+    });
+
+    if (activeEvents.length === 0) {
         container.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px; color:#999;">Aucun blocage actif</td></tr>';
         return;
     }
 
-    // Sort by week, day, time
-    const daysOrder = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
-    const sorted = [...systemEvents].sort((a,b) => {
-        if (a.week !== b.week) return a.week - b.week;
-        if (a.day !== b.day) return daysOrder.indexOf(a.day) - daysOrder.indexOf(b.day);
-        return a.startTime.localeCompare(b.startTime);
+    // Tri par date de début
+    const sorted = [...activeEvents].sort((a, b) => {
+        const dateA = isMultiDayEvent(a) ? a.dateStart : a.dateStr;
+        const dateB = isMultiDayEvent(b) ? b.dateStart : b.dateStr;
+        return dateA.localeCompare(dateB);
     });
 
-    container.innerHTML = sorted.map(e => `
-        <tr style="border-bottom: 1px solid #eee;">
-            <td style="padding:10px;">
-                <span style="display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.85em; background:${e.type === 'fermeture' ? '#f8d7da' : '#fff3cd'}; color:${e.type === 'fermeture' ? '#721c24' : '#856404'};">
-                    ${e.type === 'fermeture' ? 'Fermeture' : 'Maintenance'}
-                </span>
-            </td>
-            <td style="padding:10px; font-weight:500;">${e.machine === 'ALL' ? 'Toutes les machines' : e.machine}</td>
-            <td style="padding:10px;">
-                ${e.dateStr ? `<span style="font-weight:bold">${new Date(e.dateStr).toLocaleDateString('fr-FR', {day: '2-digit', month: '2-digit'})}</span>` : ''} 
-                S${e.week} ${e.day} <br><small>${e.startTime} - ${e.endTime}</small>
-            </td>
-            <td style="padding:10px; color:#666;">${e.reason}</td>
-            <td style="padding:10px; text-align:right;">
-                <button class="btn btn-sm btn-danger" onclick="deleteSystemEvent('${e.id}')">Supprimer</button>
-            </td>
-        </tr>
-    `).join('');
+    container.innerHTML = sorted.map(e => {
+        const isMultiDay = isMultiDayEvent(e);
+
+        // Formater l'affichage de la période
+        let periodDisplay;
+        if (isMultiDay) {
+            const start = new Date(e.dateStart);
+            const end = new Date(e.dateEnd);
+            const isSingleDay = e.dateStart === e.dateEnd;
+
+            if (isSingleDay) {
+                periodDisplay = `
+                    <span style="font-weight:bold">${start.toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit', year:'2-digit'})}</span><br>
+                    <small>${e.startTimeFirstDay} - ${e.endTimeLastDay}</small>
+                `;
+            } else {
+                periodDisplay = `
+                    <span style="font-weight:bold">
+                        ${start.toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'})} -
+                        ${end.toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit', year:'2-digit'})}
+                    </span><br>
+                    <small>Début: ${e.startTimeFirstDay} | Fin: ${e.endTimeLastDay}</small>
+                `;
+            }
+        } else {
+            // Ancien format
+            periodDisplay = `
+                ${e.dateStr ? `<span style="font-weight:bold">${new Date(e.dateStr).toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'})}</span>` : ''}
+                S${e.week} ${e.day}<br>
+                <small>${e.startTime} - ${e.endTime}</small>
+            `;
+        }
+
+        return `
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding:10px;">
+                    <span style="display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.85em;
+                                 background:${e.type === 'fermeture' ? '#f8d7da' : '#fff3cd'};
+                                 color:${e.type === 'fermeture' ? '#721c24' : '#856404'};">
+                        ${e.type === 'fermeture' ? 'Fermeture' : 'Maintenance'}
+                    </span>
+                </td>
+                <td style="padding:10px; font-weight:500;">
+                    ${e.machine === 'ALL' ? 'Toutes les machines' : e.machine}
+                </td>
+                <td style="padding:10px;">${periodDisplay}</td>
+                <td style="padding:10px; color:#666;">${e.reason}</td>
+                <td style="padding:10px; text-align:right;">
+                    <button class="btn btn-sm btn-secondary" onclick="editSystemEvent('${e.id}')"
+                            style="margin-right:5px;">Modifier</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteSystemEvent('${e.id}')">Supprimer</button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+/**
+ * Pré-remplir le formulaire pour modifier un événement existant
+ */
+function editSystemEvent(id) {
+    const event = systemEvents.find(e => e.id === id);
+    if (!event) {
+        Toast.error("Événement introuvable");
+        return;
+    }
+
+    editingEventId = id;
+
+    // Pré-remplir le type
+    document.getElementById('sysEventType').value = event.type;
+    toggleMachineSelect();
+
+    // Pré-remplir la machine si pas 'ALL'
+    if (event.machine !== 'ALL') {
+        document.getElementById('sysMachine').value = event.machine;
+    }
+
+    // Pré-remplir les dates et horaires selon le format
+    if (isMultiDayEvent(event)) {
+        document.getElementById('sysDateStart').value = event.dateStart;
+        document.getElementById('sysDateEnd').value = event.dateEnd;
+        document.getElementById('sysStart').value = event.startTimeFirstDay;
+        document.getElementById('sysEnd').value = event.endTimeLastDay;
+    } else {
+        // Ancien format
+        document.getElementById('sysDateStart').value = event.dateStr;
+        document.getElementById('sysDateEnd').value = event.dateStr;
+        document.getElementById('sysStart').value = event.startTime;
+        document.getElementById('sysEnd').value = event.endTime;
+    }
+
+    // Restaurer le checkbox fullLastDay et mettre à jour la visibilité
+    document.getElementById('sysFullLastDay').checked = event.fullLastDay || false;
+    updateFullLastDayVisibility();
+
+    document.getElementById('sysReason').value = event.reason || '';
+
+    // Changer le texte du bouton
+    const addBtn = document.getElementById('btnAddSystemEvent');
+    if (addBtn) {
+        addBtn.textContent = 'Sauvegarder les modifications';
+        addBtn.classList.remove('btn-primary');
+        addBtn.classList.add('btn-success');
+    }
+
+    // Ajouter un bouton Annuler si pas déjà présent
+    if (!document.getElementById('btnCancelEdit')) {
+        const cancelBtn = document.createElement('button');
+        cancelBtn.id = 'btnCancelEdit';
+        cancelBtn.className = 'btn btn-secondary';
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = 'Annuler';
+        cancelBtn.style.marginLeft = '10px';
+        cancelBtn.onclick = cancelEditSystemEvent;
+        if (addBtn && addBtn.parentNode) {
+            addBtn.parentNode.appendChild(cancelBtn);
+        }
+    }
+
+    Toast.info("Mode édition activé");
+}
+
+/**
+ * Annuler le mode édition
+ */
+function cancelEditSystemEvent() {
+    editingEventId = null;
+    resetSystemEventForm();
+    Toast.info("Édition annulée");
+}
+
+/**
+ * Réinitialiser le formulaire après ajout/modification
+ */
+function resetSystemEventForm() {
+    // Reset les valeurs du formulaire
+    document.getElementById('sysEventType').value = 'maintenance';
+    toggleMachineSelect();
+
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('sysDateStart').value = today;
+    document.getElementById('sysDateEnd').value = today;
+    document.getElementById('sysStart').value = '07:30';
+    document.getElementById('sysEnd').value = '16:30';
+    document.getElementById('sysReason').value = '';
+
+    // Reset le bouton
+    const addBtn = document.getElementById('btnAddSystemEvent');
+    if (addBtn) {
+        addBtn.textContent = 'Ajouter le blocage';
+        addBtn.classList.remove('btn-success');
+        addBtn.classList.add('btn-primary');
+    }
+
+    // Supprimer le bouton Annuler s'il existe
+    const cancelBtn = document.getElementById('btnCancelEdit');
+    if (cancelBtn) {
+        cancelBtn.remove();
+    }
 }
 
 // Global exposure for onclick
 window.deleteSystemEvent = deleteSystemEvent;
+window.editSystemEvent = editSystemEvent;
+window.cancelEditSystemEvent = cancelEditSystemEvent;
 
 // ===================================
 // View Toggle
@@ -5127,8 +5670,8 @@ function findNextAvailableSlotForDisplacement(machine, duration, startDay, start
             });
         });
 
-        // Ajouter les systemEvents
-        systemEvents
+        // Ajouter les systemEvents - utilise les événements expansés pour supporter v2
+        getExpandedSystemEvents()
             .filter(e => (e.machine === machine || e.machine === 'ALL') &&
                          e.day === dayName &&
                          e.week === weekNum &&
@@ -5998,6 +6541,107 @@ function tryDisplaceConflicts(conflicts, machine, dayName, weekNum, yearNum, aft
 }
 
 /**
+ * Scinde une opération à la limite des heures normales (évite les heures sup)
+ * Utilisé quand l'utilisateur refuse les heures supplémentaires
+ * @param {object} operation - L'opération à scinder
+ * @param {string} machine - Machine assignée
+ * @param {number} startWeek - Semaine de début
+ * @param {number} startYear - Année de début
+ * @param {string} startDay - Jour de début
+ * @param {number} startHour - Heure de début (décimal)
+ * @returns {Array} Tableau de fragments
+ */
+function splitAtNormalHoursEnd(operation, machine, startWeek, startYear, startDay, startHour) {
+    const fragments = [];
+    let remainingDuration = operation.dureeTotal;
+    let currentWeek = startWeek;
+    let currentYear = startYear;
+    let currentDay = startDay;
+    let currentHour = startHour;
+
+    console.log(`[SPLIT-NORMAL] Scindage à limite heures normales pour ${operation.type} (${remainingDuration}h) à partir de ${currentDay} ${decimalToTimeString(currentHour)}`);
+
+    while (remainingDuration > 0.01) {
+        const schedule = getScheduleForDay(currentDay);
+        const normalEnd = schedule.standardEnd; // 16.5 ou 12.0
+
+        // Gérer la pause déjeuner si nécessaire
+        let fragmentEnd = currentHour + remainingDuration;
+
+        if (schedule.lunchStart !== null && currentHour < schedule.lunchStart && fragmentEnd > schedule.lunchStart) {
+            // Split avant la pause déjeuner
+            const durationBeforeLunch = schedule.lunchStart - currentHour;
+            console.log(`[SPLIT-NORMAL] ⚠️ Opération chevauche pause déjeuner → split avant pause (${durationBeforeLunch}h)`);
+
+            fragments.push({
+                duration: durationBeforeLunch,
+                machine: machine,
+                week: currentWeek,
+                year: currentYear,
+                day: currentDay,
+                startHour: currentHour,
+                endHour: schedule.lunchStart,
+                type: operation.type
+            });
+
+            remainingDuration -= durationBeforeLunch;
+            currentHour = schedule.lunchEnd; // 13:00
+            fragmentEnd = currentHour + remainingDuration;
+        }
+
+        // Vérifier si dépasse les heures normales
+        if (fragmentEnd > normalEnd) {
+            // Split à la limite des heures normales (ÉVITE heures sup)
+            const durationUntilNormalEnd = normalEnd - currentHour;
+            console.log(`[SPLIT-NORMAL] ⚠️ Opération dépasse heures normales → split à ${decimalToTimeString(normalEnd)} (${durationUntilNormalEnd}h)`);
+
+            fragments.push({
+                duration: durationUntilNormalEnd,
+                machine: machine,
+                week: currentWeek,
+                year: currentYear,
+                day: currentDay,
+                startHour: currentHour,
+                endHour: normalEnd,
+                type: operation.type
+            });
+
+            remainingDuration -= durationUntilNormalEnd;
+
+            // Passer au jour suivant
+            const nextDay = getNextWorkDay(currentDay, currentWeek, currentYear);
+            if (!nextDay) {
+                console.error('[SPLIT-NORMAL] ✗ Impossible de continuer au jour suivant');
+                break;
+            }
+
+            currentWeek = nextDay.week;
+            currentYear = nextDay.year;
+            currentDay = nextDay.day;
+            currentHour = getScheduleForDay(currentDay).start;
+            console.log(`[SPLIT-NORMAL] Continuation le lendemain: ${currentDay} semaine ${currentWeek} à ${decimalToTimeString(currentHour)}`);
+        } else {
+            // Tient dans la journée (heures normales)
+            fragments.push({
+                duration: remainingDuration,
+                machine: machine,
+                week: currentWeek,
+                year: currentYear,
+                day: currentDay,
+                startHour: currentHour,
+                endHour: fragmentEnd,
+                type: operation.type
+            });
+
+            remainingDuration = 0;
+        }
+    }
+
+    console.log(`[SPLIT-NORMAL] Résultat: ${fragments.length} fragment(s):`, fragments.map(f => `${f.day} ${decimalToTimeString(f.startHour)}-${decimalToTimeString(f.endHour)} (${f.duration}h)`));
+    return fragments;
+}
+
+/**
  * Split intelligent d'une opération en fragments si nécessaire
  * Une opération se split UNIQUEMENT si :
  * 1. Elle chevauche une pause déjeuner
@@ -6131,11 +6775,33 @@ function findConflicts(machine, dayName, weekNum, yearNum, startHour, endHour) {
 
 /**
  * Check if there is a system block (maintenance/fermeture)
+ * Supporte les deux formats : v1 (ancien) et v2 (multi-jours)
  * Note : La pause déjeuner n'est PLUS bloquante ici, car le split intelligent s'en occupe
  */
 function hasSystemBlock(machine, dayName, weekNum, yearNum, startHour, endHour) {
+    // Calculer la date cible pour comparaison avec les événements v2
+    const targetDate = getDateFromWeekDay(weekNum, dayName, "00:00", yearNum);
+    const targetDateStr = targetDate.toISOString().split('T')[0];
+
     const hasEvent = systemEvents.some(e => {
-        if ((e.machine !== machine && e.machine !== 'ALL')) return false;
+        // Machine check commun
+        if (e.machine !== machine && e.machine !== 'ALL') return false;
+
+        // === FORMAT V2 (multi-jours) ===
+        if (isMultiDayEvent(e)) {
+            // Vérifier si targetDate est dans la plage [dateStart, dateEnd]
+            if (targetDateStr < e.dateStart || targetDateStr > e.dateEnd) return false;
+
+            // Calculer les horaires effectifs pour CE jour
+            const { effectiveStart, effectiveEnd } = getEffectiveHoursForDay(e, targetDateStr, dayName);
+
+            const eventStart = timeToDecimalHours(effectiveStart);
+            const eventEnd = timeToDecimalHours(effectiveEnd);
+
+            return (startHour < eventEnd && endHour > eventStart);
+        }
+
+        // === FORMAT V1 (ancien) ===
         if (e.day !== dayName || e.week !== weekNum) return false;
         if (e.year && e.year !== yearNum) return false;
 

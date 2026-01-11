@@ -1092,6 +1092,9 @@ function calculerCapaciteMachine(machine, semaine, annee = null) {
         .flatMap(cmd => cmd.operations)
         .flatMap(op => op.slots)
         .filter(slot => {
+            // Filter by machine, week and year
+            if (slot.machine !== machine || slot.semaine !== semaine) return false;
+
             // 🔒 CRITICAL: Filter by year to avoid showing operations from different years
             const slotYear = getISOWeekYear(slot.dateDebut);
             return slotYear === targetYear;
@@ -1975,25 +1978,10 @@ function renderVueSemaine() {
     ALL_MACHINES.forEach(machine => {
         html += '<div class="semaine-row">';
 
-        // Machine name + average capacity across displayed weeks
-        let totalHours = 0;
-        weeksToDisplay.forEach(item => {
-            const capacity = calculerCapaciteMachine(machine, item.week, item.year);
-            totalHours += capacity.heuresUtilisees;
-        });
-        const avgHours = Math.round(totalHours / 3 * 10) / 10;
-        const avgPct = Math.round((avgHours / TOTAL_HOURS_PER_WEEK) * 100);
-        const capacityClass = getCapacityColorClass(avgPct);
-
+        // Machine name only (capacity is now shown per week cell)
         html += `
             <div class="machine-cell">
                 <div class="machine-name">${machine}</div>
-                <div class="capacity-gauge">
-                    <div class="capacity-bar">
-                        <div class="capacity-fill ${capacityClass}" style="width: ${Math.min(100, avgPct)}%"></div>
-                    </div>
-                    <div class="capacity-label">${avgHours}h/37h (${avgPct}%)</div>
-                </div>
             </div>
         `;
 
@@ -2015,8 +2003,22 @@ function renderVueSemaine() {
 
             // Add week-separator class to first cell of each week
             const weekSeparatorClass = index > 0 ? 'week-separator' : '';
-            
+
+            // Calculate capacity for this specific week
+            const capacity = calculerCapaciteMachine(machine, item.week, item.year);
+            const weekCapacityClass = getCapacityColorClass(capacity.pourcentage);
+
             html += `<div class="week-cell ${weekSeparatorClass}" data-machine="${machine}" data-week="${item.week}" data-year="${item.year}">`;
+
+            // Capacity gauge at top of cell
+            html += `
+                <div class="week-capacity-gauge">
+                    <div class="capacity-bar-mini">
+                        <div class="capacity-fill ${weekCapacityClass}" style="width: ${Math.min(100, capacity.pourcentage)}%"></div>
+                    </div>
+                    <span class="capacity-label-mini">${formatHours(capacity.heuresUtilisees)} (${capacity.pourcentage}%)</span>
+                </div>
+            `;
 
             commandsInWeek.forEach(cmd => {
                 html += `
@@ -2244,18 +2246,21 @@ function renderVueJournee() {
             // Create hourly time grid (background)
             html += '<div class="time-grid">';
             
-            // Generate time slots based on day
+            // Generate time slots based on day (30 min intervals)
             if (day === 'Vendredi') {
                 // Friday: 07:00-12:00 + Overtime up to 14:00
-                // Render up to 14:00 to show overtime slots if any
-                for (let hour = 7; hour < 14; hour++) {
-                    const timeSlot = `${hour.toString().padStart(2, '0')}:00`;
+                for (let h = 7; h < 14; h += 0.5) {
+                    const hour = Math.floor(h);
+                    const minute = (h % 1 === 0.5) ? '30' : '00';
+                    const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
+                    const isHalf = (h % 1 === 0.5);
+                    
                     html += `
-                        <div class="time-slot drop-zone"
+                        <div class="time-slot drop-zone ${isHalf ? 'half-hour' : 'full-hour'}"
                              data-machine="${machine}"
                              data-day="${day}"
                              data-week="${semaineSelectionnee}"
-                             data-hour="${hour}"
+                             data-hour="${h}"
                              data-time="${timeSlot}">
                             <div class="time-label">${timeSlot}</div>
                         </div>
@@ -2263,18 +2268,19 @@ function renderVueJournee() {
                 }
             } else {
                 // Mon-Thu: 07:30-16:30 + Overtime up to 18:00
-                // Render up to 18:00
-                for (let i = 0; i < 11; i++) { // 7.5 to 17.5 (18:00 end)
-                    const hourDecimal = 7.5 + i; 
-                    const hour = Math.floor(hourDecimal);
-                    const minute = (hourDecimal % 1 === 0.5) ? '30' : '00';
+                // Render up to 18:30 to be safe
+                for (let h = 7.5; h < 18.5; h += 0.5) { 
+                    const hour = Math.floor(h);
+                    const minute = (h % 1 === 0.5) ? '30' : '00';
                     const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
+                    const isHalf = (h % 1 === 0.5);
+
                     html += `
-                        <div class="time-slot drop-zone"
+                        <div class="time-slot drop-zone ${isHalf ? 'half-hour' : 'full-hour'}"
                              data-machine="${machine}"
                              data-day="${day}"
                              data-week="${semaineSelectionnee}"
-                             data-hour="${hourDecimal}"
+                             data-hour="${h}"
                              data-time="${timeSlot}">
                             <div class="time-label">${timeSlot}</div>
                         </div>
@@ -2386,10 +2392,11 @@ function renderVueJournee() {
                             
                             ${slot.overtime ? '<div class="overtime-indicator"></div>' : ''}
                             
-                            <div class="slot-time">${slot.heureDebut}-${slot.heureFin}</div>
-                            <div class="slot-label">[${slot.commandeId.substring(5)}]</div>
-                            <div class="slot-client">${slot.client}</div>
-                            <div class="slot-type">${slot.operationType}</div>
+                            <div class="slot-top-row" style="display: flex; justify-content: space-between; align-items: center; width: 100%; font-size: 0.85em;">
+                                <span class="slot-time" style="font-weight: bold;">${slot.heureDebut}-${slot.heureFin}</span>
+                                <span class="slot-client" style="font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-left: 5px; flex: 1; text-align: right;">${slot.client}</span>
+                            </div>
+                            <div class="slot-label" style="text-align: center; width: 100%; font-weight: 800; font-size: 1.1em; margin-top: 2px;">${slot.commandeId.substring(5)}</div>
                         </div>
                     `;
                 };

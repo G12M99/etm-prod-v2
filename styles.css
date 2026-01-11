@@ -812,6 +812,31 @@ body {
     border-left: 3px solid var(--color-border);
 }
 
+/* Jauge de capacité dans les cellules semaine */
+.week-capacity-gauge {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: var(--spacing-sm);
+    padding-bottom: var(--spacing-sm);
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.capacity-bar-mini {
+    height: 8px;
+    background-color: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.capacity-label-mini {
+    font-size: 10px;
+    color: var(--color-text-secondary);
+    font-weight: 600;
+    text-align: center;
+}
+
 .command-badge {
     background-color: var(--color-primary);
     color: white;
@@ -958,11 +983,23 @@ body {
 
 .time-slot {
     display: flex;
-    height: 60px;
-    min-height: 60px;
-    border-bottom: 1px solid #e9ecef;
+    height: 30px;
+    min-height: 30px;
+    border-bottom: 1px solid #e9ecef; /* Solid line for hour/half-hour bottom */
     transition: background-color 0.2s;
     position: relative;
+    box-sizing: border-box; /* Ensure border is included in height */
+}
+
+/* Style spécifique pour les créneaux de demi-heure (visuellement connectés à l'heure du dessus) */
+.time-slot.half-hour {
+    border-top: 1px dotted #e9ecef; /* Dotted line separation from the full hour */
+    border-bottom: 1px solid #dee2e6; /* Stronger line closing the hour block */
+}
+
+/* Style pour l'heure pleine (début d'heure) */
+.time-slot.full-hour {
+    border-bottom: none; /* No bottom border, let the half-hour dot it */
 }
 
 .time-slot:hover {
@@ -984,6 +1021,16 @@ body {
     display: flex;
     align-items: flex-start;
     padding-top: 4px;
+    line-height: 1;
+}
+
+/* Cache le label pour les demi-heures pour alléger, SAUF pour le premier créneau de la journée */
+.time-slot.half-hour .time-label {
+    visibility: hidden;
+}
+
+.time-slot:first-child .time-label {
+    visibility: visible !important;
 }
 
 .operations-overlay {
@@ -1132,17 +1179,23 @@ body {
     border-bottom: 1px dashed #ccc;
 }
 
-/* Operation colors applied directly to the slot */
+/* Operation colors applied directly to the slot with darker borders for better visibility */
 .operation-slot.cisaillage {
     background-color: var(--color-cisaillage);
+    border: 1px solid #155724; /* Darker green */
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1); /* Subtle inner highlight */
 }
 
 .operation-slot.poinconnage {
     background-color: var(--color-poinconnage);
+    border: 1px solid #c65f05; /* Darker orange */
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
 }
 
 .operation-slot.pliage {
     background-color: var(--color-pliage);
+    border: 1px solid #4c2f85; /* Darker purple */
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
 }
 
 .operation-slot:hover {
@@ -2152,7 +2205,7 @@ body {
 .scenario-card.selected {
     border-color: var(--color-primary);
     background-color: rgba(13, 110, 253, 0.05);
-    ring: 2px solid var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary);
 }
 
 .scenario-card.overtime {

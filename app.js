@@ -199,6 +199,37 @@ function migrateMachineNames() {
     return false;
 }
 
+// ===================================
+// Migration des champs Override de temps
+// ===================================
+function migrateOperationOverrideFields() {
+    let migrationCount = 0;
+
+    commandes.forEach(commande => {
+        if (!commande.operations) return;
+
+        commande.operations.forEach(operation => {
+            // Ajouter les champs manquants avec valeurs par défaut
+            if (operation.dureeOriginal === undefined) {
+                operation.dureeOriginal = operation.dureeTotal;
+                migrationCount++;
+            }
+            if (operation.dureeOverride === undefined) {
+                operation.dureeOverride = null;
+            }
+            if (operation.overrideTimestamp === undefined) {
+                operation.overrideTimestamp = null;
+            }
+        });
+    });
+
+    if (migrationCount > 0) {
+        console.log(`✅ Migration override fields: ${migrationCount} opérations mises à jour`);
+        return true;
+    }
+    return false;
+}
+
 
 // ===================================
 // CSV Parsing Functions
@@ -311,6 +342,9 @@ function mapGoogleSheetRowToOrder(row) {
             order.operations.push({
                 type: opConfig.type,
                 dureeTotal: duration,
+                dureeOriginal: duration,      // Temps original GSheet
+                dureeOverride: null,          // Modification utilisateur (null = pas de modif)
+                overrideTimestamp: null,      // Date de la modification
                 progressionReelle: 0, // No progress data in sheet
                 statut: 'Non placée', // Default to unplaced since no slot data
                 slots: [] // No slot data in this simplified sheet
@@ -348,9 +382,13 @@ function mapSheetRowToOrder(row) {
         const opType = row[`Op ${i} Type`];
         if (!opType) continue;
 
+        const dureeValue = timeToDecimalHours(row[`Op ${i} Durée`]);
         const operation = {
             type: opType,
-            dureeTotal: timeToDecimalHours(row[`Op ${i} Durée`]),
+            dureeTotal: dureeValue,
+            dureeOriginal: dureeValue,        // Temps original GSheet
+            dureeOverride: null,              // Modification utilisateur
+            overrideTimestamp: null,          // Date de la modification
             progressionReelle: parseInt(row[`Op ${i} Progression`]) || 0,
             statut: row[`Op ${i} Statut`] || 'Non placée',
             slots: []
@@ -1730,6 +1768,255 @@ function formatHours(hours) {
 }
 
 // ===================================
+// SYSTÈME D'OVERRIDE DES TEMPS D'OPÉRATIONS
+// ===================================
+
+/**
+ * Vérifie si une opération a un override de temps
+ */
+function hasTimeOverride(operation) {
+    return operation.dureeOverride !== null && operation.dureeOverride !== undefined;
+}
+
+/**
+ * Définit un override de temps pour une opération
+ * @param {string} commandeId - ID de la commande
+ * @param {string} operationType - Type d'opération (Cisaillage, Poinçonnage, Pliage)
+ * @param {number} newDuration - Nouvelle durée en heures décimales
+ * @returns {boolean} Succès
+ */
+function setOperationTimeOverride(commandeId, operationType, newDuration) {
+    const cmd = commandes.find(c => c.id === commandeId);
+    if (!cmd) {
+        Toast.error('Commande non trouvée');
+        return false;
+    }
+
+    const operation = cmd.operations.find(op => op.type === operationType);
+    if (!operation) {
+        Toast.error('Opération non trouvée');
+        return false;
+    }
+
+    // Stocker l'original si pas encore fait
+    if (operation.dureeOriginal === undefined || operation.dureeOriginal === null) {
+        operation.dureeOriginal = operation.dureeTotal;
+    }
+
+    // Appliquer l'override
+    operation.dureeOverride = newDuration;
+    operation.overrideTimestamp = new Date().toISOString();
+    operation.dureeTotal = newDuration;
+
+    // Sauvegarder et rafraîchir
+    historyManager.saveState(`Override temps ${operationType} ${commandeId}`);
+    syncManager.saveLocalData();
+    refresh();
+
+    Toast.success(`Temps ${operationType} modifié: ${formatHours(newDuration)}`);
+    return true;
+}
+
+/**
+ * Réinitialise le temps d'une opération à la valeur originale du Google Sheet
+ */
+function resetOperationTimeOverride(commandeId, operationType) {
+    const cmd = commandes.find(c => c.id === commandeId);
+    if (!cmd) return false;
+
+    const operation = cmd.operations.find(op => op.type === operationType);
+    if (!operation || !hasTimeOverride(operation)) return false;
+
+    // Restaurer l'original
+    operation.dureeTotal = operation.dureeOriginal;
+    operation.dureeOverride = null;
+    operation.overrideTimestamp = null;
+
+    historyManager.saveState(`Reset temps ${operationType} ${commandeId}`);
+    syncManager.saveLocalData();
+    refresh();
+
+    Toast.info(`Temps ${operationType} réinitialisé: ${formatHours(operation.dureeOriginal)}`);
+    return true;
+}
+
+/**
+ * Affiche le popup d'édition de temps (sidebar)
+ */
+function showTimeEditPopup(commandeId, operationType, currentDuration, originalDuration, targetElement) {
+    // Supprimer popup existant
+    closeTimeEditPopup();
+
+    const hasOverride = Math.abs(currentDuration - originalDuration) > 0.001;
+
+    const popup = document.createElement('div');
+    popup.className = 'time-edit-popup';
+    popup.innerHTML = `
+        <div class="time-edit-header">
+            <span>Modifier temps ${operationType}</span>
+            <button class="btn-close-popup" onclick="closeTimeEditPopup()">&times;</button>
+        </div>
+        <div class="time-edit-body">
+            <div class="time-input-group">
+                <label>Heures:</label>
+                <input type="number" id="timeEditHours" min="0" max="99" value="${Math.floor(currentDuration)}" />
+            </div>
+            <div class="time-input-group">
+                <label>Minutes:</label>
+                <input type="number" id="timeEditMinutes" min="0" max="59" step="5" value="${Math.round((currentDuration % 1) * 60)}" />
+            </div>
+            ${hasOverride ? `
+                <div class="time-original-info">
+                    Original GSheet: ${formatHours(originalDuration)}
+                </div>
+            ` : ''}
+        </div>
+        <div class="time-edit-actions">
+            ${hasOverride ? `
+                <button class="btn btn-sm btn-secondary" onclick="resetOperationTimeOverride('${commandeId}', '${operationType}'); closeTimeEditPopup();">
+                    Réinitialiser
+                </button>
+            ` : ''}
+            <button class="btn btn-sm btn-primary" onclick="applyTimeEdit('${commandeId}', '${operationType}')">
+                Appliquer
+            </button>
+        </div>
+    `;
+
+    // Positionner le popup près de l'élément cliqué
+    const rect = targetElement.getBoundingClientRect();
+    popup.style.position = 'fixed';
+    popup.style.left = `${Math.min(rect.left, window.innerWidth - 220)}px`;
+    popup.style.top = `${rect.bottom + 5}px`;
+    popup.style.zIndex = '1001';
+
+    document.body.appendChild(popup);
+
+    // Focus sur le champ heures
+    document.getElementById('timeEditHours').focus();
+    document.getElementById('timeEditHours').select();
+
+    // Fermer au clic extérieur (avec délai pour éviter fermeture immédiate)
+    setTimeout(() => {
+        document.addEventListener('click', closeTimeEditPopupOnOutsideClick);
+    }, 10);
+}
+
+function closeTimeEditPopup() {
+    const popup = document.querySelector('.time-edit-popup');
+    if (popup) popup.remove();
+    document.removeEventListener('click', closeTimeEditPopupOnOutsideClick);
+}
+
+function closeTimeEditPopupOnOutsideClick(e) {
+    const popup = document.querySelector('.time-edit-popup');
+    if (popup && !popup.contains(e.target)) {
+        closeTimeEditPopup();
+    }
+}
+
+function applyTimeEdit(commandeId, operationType) {
+    const hours = parseInt(document.getElementById('timeEditHours').value) || 0;
+    const minutes = parseInt(document.getElementById('timeEditMinutes').value) || 0;
+    const newDuration = hours + (minutes / 60);
+
+    if (newDuration <= 0) {
+        Toast.warning('La durée doit être supérieure à 0');
+        return;
+    }
+
+    setOperationTimeOverride(commandeId, operationType, newDuration);
+    closeTimeEditPopup();
+}
+
+/**
+ * Affiche le modal d'édition de temps (depuis modal détail)
+ */
+function showModalTimeEdit(commandeId, operationType, currentDuration, originalDuration) {
+    const hasOverride = Math.abs(currentDuration - originalDuration) > 0.001;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-time-edit-overlay';
+    overlay.id = 'modalTimeEditOverlay';
+    overlay.innerHTML = `
+        <div class="modal-time-edit-content">
+            <h3>Modifier temps: ${operationType}</h3>
+            <div class="form-group">
+                <label>Durée (heures décimales):</label>
+                <input type="number" id="modalTimeEditValue"
+                       step="0.25" min="0.25" max="100"
+                       value="${currentDuration.toFixed(2)}" />
+            </div>
+            <p class="time-preview">
+                = <strong id="timePreview">${formatHours(currentDuration)}</strong>
+            </p>
+            ${hasOverride ? `
+                <p class="original-time-info">
+                    Temps original Google Sheet: <strong>${formatHours(originalDuration)}</strong>
+                </p>
+            ` : ''}
+            <div class="modal-time-edit-actions">
+                <button class="btn btn-secondary" onclick="closeModalTimeEdit()">Annuler</button>
+                ${hasOverride ? `
+                    <button class="btn btn-warning" onclick="resetAndCloseModalTimeEdit('${commandeId}', '${operationType}')">
+                        Réinitialiser
+                    </button>
+                ` : ''}
+                <button class="btn btn-primary" onclick="applyModalTimeEdit('${commandeId}', '${operationType}')">
+                    Appliquer
+                </button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Live preview
+    document.getElementById('modalTimeEditValue').addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value) || 0;
+        document.getElementById('timePreview').textContent = formatHours(val);
+    });
+
+    document.getElementById('modalTimeEditValue').focus();
+    document.getElementById('modalTimeEditValue').select();
+}
+
+function closeModalTimeEdit() {
+    const overlay = document.getElementById('modalTimeEditOverlay');
+    if (overlay) overlay.remove();
+}
+
+function applyModalTimeEdit(commandeId, operationType) {
+    const value = parseFloat(document.getElementById('modalTimeEditValue').value);
+    if (value <= 0) {
+        Toast.warning('La durée doit être supérieure à 0');
+        return;
+    }
+    setOperationTimeOverride(commandeId, operationType, value);
+    closeModalTimeEdit();
+    // Rafraîchir le modal détail si ouvert
+    showCommandeDetails(commandeId);
+}
+
+function resetAndCloseModalTimeEdit(commandeId, operationType) {
+    resetOperationTimeOverride(commandeId, operationType);
+    closeModalTimeEdit();
+    showCommandeDetails(commandeId);
+}
+
+// Exposer les fonctions globalement
+window.hasTimeOverride = hasTimeOverride;
+window.setOperationTimeOverride = setOperationTimeOverride;
+window.resetOperationTimeOverride = resetOperationTimeOverride;
+window.showTimeEditPopup = showTimeEditPopup;
+window.closeTimeEditPopup = closeTimeEditPopup;
+window.applyTimeEdit = applyTimeEdit;
+window.showModalTimeEdit = showModalTimeEdit;
+window.closeModalTimeEdit = closeModalTimeEdit;
+window.applyModalTimeEdit = applyModalTimeEdit;
+window.resetAndCloseModalTimeEdit = resetAndCloseModalTimeEdit;
+
+// ===================================
 // 🔒 ORDRE CHRONOLOGIQUE - RÈGLE CRITIQUE
 // ===================================
 // ORDRE CHRONOLOGIQUE OBLIGATOIRE: Cisaille → Poinçon → Pliage
@@ -2553,8 +2840,10 @@ function renderCommandesNonPlacees(searchQuery = '') {
             if (!op.slots || op.slots.length === 0) {
                 hasUnplacedOps = true;
                 const typeClass = op.type.toLowerCase().replace('ç', 'c').replace('é', 'e');
+                const hasOverride = hasTimeOverride(op);
+                const originalDuration = op.dureeOriginal || op.dureeTotal;
                 operationsHtml += `
-                    <div class="operation-item-sidebar ${typeClass} draggable-from-sidebar"
+                    <div class="operation-item-sidebar ${typeClass} draggable-from-sidebar ${hasOverride ? 'has-override' : ''}"
                          draggable="true"
                          data-commande-id="${cmd.id}"
                          data-operation-type="${op.type}"
@@ -2568,7 +2857,11 @@ function renderCommandesNonPlacees(searchQuery = '') {
                                     (${cmd.client})
                                 </span>
                             </div>
-                            <div class="op-duration">${formatHours(op.dureeTotal)}</div>
+                            <div class="op-duration ${hasOverride ? 'overridden' : ''}"
+                                 onclick="event.stopPropagation(); showTimeEditPopup('${cmd.id}', '${op.type}', ${op.dureeTotal}, ${originalDuration}, this)"
+                                 title="${hasOverride ? 'Temps modifié (Original: ' + formatHours(originalDuration) + ') - Cliquer pour modifier' : 'Cliquer pour modifier le temps'}">
+                                ${formatHours(op.dureeTotal)}${hasOverride ? '<span class="override-indicator">*</span>' : ''}
+                            </div>
                         </div>
                     </div>
                 `;
@@ -3649,9 +3942,25 @@ function showCommandeDetails(commandeId) {
         </div>
         <div class="operations-list">
             <h3>Opérations</h3>
-            ${cmd.operations.map(op => `
-                <div class="operation-item ${op.type.toLowerCase().replace('ç', 'c').replace('é', 'e')}">
-                    <div class="operation-item-header">${op.type} - ${formatHours(op.dureeTotal)}</div>
+            ${cmd.operations.map(op => {
+                const hasOverride = hasTimeOverride(op);
+                const originalDuration = op.dureeOriginal || op.dureeTotal;
+                const typeClass = op.type.toLowerCase().replace('ç', 'c').replace('é', 'e');
+                return `
+                <div class="operation-item ${typeClass} ${hasOverride ? 'has-override' : ''}">
+                    <div class="operation-item-header">
+                        <span>${op.type}</span>
+                        <span class="operation-time-edit">
+                            <span class="operation-duration ${hasOverride ? 'overridden' : ''}"
+                                  onclick="showModalTimeEdit('${cmd.id}', '${op.type}', ${op.dureeTotal}, ${originalDuration})"
+                                  title="Cliquer pour modifier le temps">
+                                ${formatHours(op.dureeTotal)}
+                                ${hasOverride ? '<span class="override-indicator">*</span>' : ''}
+                                <span class="edit-icon">&#9998;</span>
+                            </span>
+                            ${hasOverride ? `<span class="override-badge">(Original: ${formatHours(originalDuration)})</span>` : ''}
+                        </span>
+                    </div>
                     <div class="operation-item-details">
                         ${op.slots.length > 0 ?
                             op.slots.map(slot => `
@@ -3662,8 +3971,15 @@ function showCommandeDetails(commandeId) {
                             : 'Non placée'
                         }
                     </div>
+                    ${hasOverride ? `
+                        <div class="operation-override-actions">
+                            <button class="btn btn-xs btn-secondary" onclick="resetOperationTimeOverride('${cmd.id}', '${op.type}'); showCommandeDetails('${cmd.id}');">
+                                Réinitialiser au temps original
+                            </button>
+                        </div>
+                    ` : ''}
                 </div>
-            `).join('')}
+            `}).join('')}
         </div>
     `;
 
@@ -3785,10 +4101,15 @@ class DataSyncManager {
     async init() {
         // 1. Charger données locales (localStorage) IMMÉDIATEMENT
         this.loadLocalData();
-        
+
+        // 1.5 Migrer les données existantes (ajout champs override)
+        if (migrateOperationOverrideFields()) {
+            this.saveLocalData();
+        }
+
         // 2. Tenter sync Google Sheets en arrière-plan (SANS AWAIT pour ne pas bloquer l'UI)
         this.syncWithGoogleSheets();
-        
+
         // 3. Démarrer auto-sync périodique (toutes les 5 minutes)
         this.startAutoSync();
     }
@@ -3907,24 +4228,50 @@ class DataSyncManager {
                     updatedCount++;
                 }
 
-                // La commande existe déjà en local -> On préserve le planning (slots)
+                // La commande existe déjà en local -> On préserve le planning (slots) et les overrides
                 remoteCmd.operations.forEach(remoteOp => {
                     const localOp = localCmd.operations.find(op => op.type === remoteOp.type);
-                    if (localOp && localOp.slots && localOp.slots.length > 0) {
-                        // On garde les slots locaux
-                        remoteOp.slots = localOp.slots;
-                        remoteOp.statut = localOp.statut;
-                        remoteOp.progressionReelle = localOp.progressionReelle;
+
+                    // Stocker la nouvelle valeur GSheet comme original
+                    remoteOp.dureeOriginal = remoteOp.dureeTotal;
+
+                    if (localOp) {
+                        // Préserver les slots locaux
+                        if (localOp.slots && localOp.slots.length > 0) {
+                            remoteOp.slots = localOp.slots;
+                            remoteOp.statut = localOp.statut;
+                            remoteOp.progressionReelle = localOp.progressionReelle;
+                        }
+
+                        // Préserver les overrides de temps (LOCAL PRIORITAIRE)
+                        if (localOp.dureeOverride !== null && localOp.dureeOverride !== undefined) {
+                            remoteOp.dureeOverride = localOp.dureeOverride;
+                            remoteOp.overrideTimestamp = localOp.overrideTimestamp;
+                            remoteOp.dureeTotal = localOp.dureeOverride; // L'override devient la durée effective
+                        } else {
+                            remoteOp.dureeOverride = null;
+                            remoteOp.overrideTimestamp = null;
+                        }
+                    } else {
+                        // Nouvelle opération - initialiser les champs override
+                        remoteOp.dureeOverride = null;
+                        remoteOp.overrideTimestamp = null;
                     }
                 });
-                
+
                 // Si la commande était "Planifiée" localement, on garde ce statut global
                 // sauf si le remote dit "Livrée" ou "Terminée" (force override)
                 if (localCmd.statut === 'Planifiée' && remoteCmd.statut !== 'Livrée' && remoteCmd.statut !== 'Terminée') {
                     remoteCmd.statut = 'Planifiée';
                 }
             } else {
+                // Nouvelle commande - initialiser les champs override pour toutes les opérations
                 newCount++;
+                remoteCmd.operations.forEach(op => {
+                    op.dureeOriginal = op.dureeTotal;
+                    op.dureeOverride = null;
+                    op.overrideTimestamp = null;
+                });
             }
             return remoteCmd;
         });

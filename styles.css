@@ -2783,3 +2783,271 @@ body.dragging-active .drop-zone {
     animation: pulseSmart 2s infinite;
 }
 
+/* ===================================
+   Time Override Styles
+   =================================== */
+
+/* Override indicator in sidebar */
+.op-duration {
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: var(--border-radius-sm);
+    transition: background 0.2s, color 0.2s;
+}
+
+.op-duration:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.op-duration.overridden {
+    color: #fd7e14;
+    font-weight: 600;
+}
+
+.override-indicator {
+    color: #fd7e14;
+    font-weight: bold;
+    margin-left: 2px;
+}
+
+.has-override {
+    border-style: dashed !important;
+    border-color: #fd7e14 !important;
+}
+
+/* Time edit popup */
+.time-edit-popup {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-lg);
+    padding: var(--spacing-sm);
+    min-width: 200px;
+    z-index: 1001;
+}
+
+.time-edit-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: var(--spacing-xs);
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: var(--spacing-sm);
+    font-weight: 600;
+    font-size: var(--font-size-sm);
+}
+
+.btn-close-popup {
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    padding: 0 4px;
+}
+
+.btn-close-popup:hover {
+    color: var(--color-text);
+}
+
+.time-edit-body {
+    padding: var(--spacing-xs) 0;
+}
+
+.time-input-group {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
+}
+
+.time-input-group label {
+    font-size: 12px;
+    width: 60px;
+    color: var(--color-text-secondary);
+}
+
+.time-input-group input {
+    width: 70px;
+    padding: 4px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-sm);
+    font-size: 14px;
+}
+
+.time-input-group input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+}
+
+.time-original-info {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    padding: var(--spacing-xs) 0;
+    border-top: 1px dashed var(--color-border);
+    margin-top: var(--spacing-xs);
+}
+
+.time-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-xs);
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--color-border);
+    margin-top: var(--spacing-sm);
+}
+
+/* Modal time edit overlay */
+.modal-time-edit-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+}
+
+.modal-time-edit-content {
+    background: var(--color-surface);
+    padding: var(--spacing-lg);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-lg);
+    min-width: 300px;
+    max-width: 400px;
+}
+
+.modal-time-edit-content h3 {
+    margin: 0 0 var(--spacing-md) 0;
+    color: var(--color-text);
+    font-size: var(--font-size-lg);
+}
+
+.modal-time-edit-content .form-group {
+    margin-bottom: var(--spacing-md);
+}
+
+.modal-time-edit-content .form-group label {
+    display: block;
+    margin-bottom: var(--spacing-xs);
+    font-weight: 500;
+    color: var(--color-text-secondary);
+}
+
+.modal-time-edit-content .form-group input {
+    width: 100%;
+    padding: var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-sm);
+    font-size: var(--font-size-base);
+}
+
+.modal-time-edit-content .form-group input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+}
+
+.time-preview {
+    font-size: var(--font-size-lg);
+    text-align: center;
+    padding: var(--spacing-sm);
+    background: var(--color-background);
+    border-radius: var(--border-radius-sm);
+    margin: var(--spacing-sm) 0;
+}
+
+.original-time-info {
+    font-size: var(--font-size-sm);
+    color: #856404;
+    padding: var(--spacing-sm);
+    background: #fff3cd;
+    border-radius: var(--border-radius-sm);
+    margin-bottom: var(--spacing-md);
+    border-left: 3px solid #ffc107;
+}
+
+.modal-time-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--color-border);
+}
+
+/* Operation item with override in modal */
+.operation-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+}
+
+.operation-time-edit {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
+.operation-duration {
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: var(--border-radius-sm);
+    transition: background 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.operation-duration:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.operation-duration.overridden {
+    color: #fd7e14;
+    font-weight: 600;
+}
+
+.edit-icon {
+    font-size: 12px;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+}
+
+.operation-duration:hover .edit-icon {
+    opacity: 1;
+}
+
+.override-badge {
+    font-size: 11px;
+    color: #fd7e14;
+    font-weight: normal;
+}
+
+.operation-override-actions {
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+    border-top: 1px dashed var(--color-border);
+}
+
+.btn-xs {
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
+.btn-warning {
+    background-color: #ffc107;
+    color: #212529;
+    border: none;
+}
+
+.btn-warning:hover {
+    background-color: #e0a800;
+}
+

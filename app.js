@@ -310,6 +310,32 @@ function fetchAndParseCSV() {
 }
 
 /**
+ * Helper function to get a value from a row by trying multiple possible key names
+ * Handles encoding issues with accented characters
+ */
+function getRowValue(row, possibleKeys, defaultValue = '') {
+    // First try direct key match
+    for (const key of possibleKeys) {
+        if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
+            return row[key];
+        }
+    }
+    // Fallback: search by normalized key (without accents)
+    const normalizedKeys = Object.keys(row).map(k => ({
+        original: k,
+        normalized: k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    }));
+    for (const key of possibleKeys) {
+        const normalizedSearch = key.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const match = normalizedKeys.find(nk => nk.normalized === normalizedSearch);
+        if (match && row[match.original]) {
+            return row[match.original];
+        }
+    }
+    return defaultValue;
+}
+
+/**
  * Map Google Sheet row (Simplified Format) to order object
  * Input Columns: Fin de Prod, Code cde, STATUT, Client, Poids, CISAILLE, POINCON, PLIAGE
  */
@@ -322,6 +348,7 @@ function mapGoogleSheetRowToOrder(row) {
         statut: row['STATUT'] || 'Non placée',
         materiau: 'Inconnu', // Not in new sheet, default value
         poids: parseInt(row['Poids']) || 0,
+        refCdeClient: getRowValue(row, ['Réf cde client', 'Ref cde client', 'Ref_Cde_Client'], ''),
         ressource: 'Polyvalent', // Default
         operations: []
     };
@@ -514,13 +541,67 @@ const historyManager = new HistoryManager();
 // Data Loading
 // ===================================
 
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx-HR3xMw0d6S9MKZQBqKfOzQ4Ta5OVq3UjBwOiYEuP9cFLQfzOg4h0H5uwBnS98dA/exec';
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx6uqDI6D0yat_2f583fiuqG9H5jqDNWCY1rX9pWGWhd2_HhTCmnrmXmsaF9-eDEBEemA/exec';
+const SYNC_METADATA_KEY = 'etm_sync_metadata';
+
+/**
+ * Fetch with retry and exponential backoff
+ * @param {string} url - URL to fetch
+ * @param {object} options - Fetch options
+ * @param {number} maxRetries - Maximum number of retries (default: 3)
+ * @param {number} baseDelay - Base delay in ms (default: 1000)
+ * @returns {Promise<Response>}
+ */
+async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 1000) {
+    let lastError;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout
+
+            const response = await fetch(url, {
+                ...options,
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (response.ok) {
+                return response;
+            }
+
+            // Non-retryable status codes
+            if (response.status === 404 || response.status === 401 || response.status === 403) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            lastError = new Error(`HTTP ${response.status}`);
+
+        } catch (error) {
+            lastError = error;
+
+            if (error.name === 'AbortError' && attempt < maxRetries) {
+                console.log(`Attempt ${attempt + 1} timed out, retrying...`);
+            }
+        }
+
+        if (attempt < maxRetries) {
+            const delay = baseDelay * Math.pow(2, attempt); // 1s, 2s, 4s
+            console.log(`Retrying in ${delay}ms... (attempt ${attempt + 2}/${maxRetries + 1})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+
+    throw lastError;
+}
 
 /**
  * Fetch orders from Google Apps Script
  * Returns the data instead of setting global state directly
+ * @param {boolean} forceRefresh - Force bypass all caches
  */
-async function fetchOrdersFromGoogleSheet() {
+async function fetchOrdersFromGoogleSheet(forceRefresh = false) {
     if (GOOGLE_SCRIPT_URL === 'YOUR_GOOGLE_SCRIPT_URL_HERE') {
         console.warn('⚠️ Google Script URL not set.');
         throw new Error('URL not configured');
@@ -530,38 +611,55 @@ async function fetchOrdersFromGoogleSheet() {
     console.log(`📡 Fetching data from Google Sheet at ${new Date().toLocaleTimeString()}...`);
 
     try {
-        // Timeout de 20 secondes
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000);
-        
-        // Add cache-busting timestamp to prevent caching old data
-        const response = await fetch(`${GOOGLE_SCRIPT_URL}?t=${new Date().getTime()}`, {
-            signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
+        // Get stored metadata for conditional fetching
+        const metadata = JSON.parse(localStorage.getItem(SYNC_METADATA_KEY) || '{}');
+        const lastModified = metadata.lastModified || null;
+
+        // Build URL with conditional parameters
+        const params = new URLSearchParams();
+        if (!forceRefresh && lastModified) {
+            params.append('since', lastModified); // Server checks if data changed
+        }
+        params.append('v', '2'); // API version for optimized sync
+
+        const url = `${GOOGLE_SCRIPT_URL}?${params.toString()}`;
+
+        // Use retry mechanism
+        const response = await fetchWithRetry(url);
         console.timeEnd('FetchGoogleSheet');
-        
+
         // Read text first to debug if it's not JSON
         const responseText = await response.text();
-        
-        if (!response.ok) {
-            throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
-        }
 
         // Check if response is HTML (error page) instead of JSON
         if (responseText.trim().startsWith('<')) {
             console.error('❌ Google Script returned HTML instead of JSON.');
             throw new Error('Invalid JSON response (HTML received)');
         }
-        
+
         const jsonResponse = JSON.parse(responseText);
-        
+
+        // Handle "unchanged" response from optimized server
+        if (jsonResponse.status === 'unchanged') {
+            console.log('✅ Data unchanged since last sync');
+            return null; // Signal no changes to SyncManager
+        }
+
+        // Update metadata with new lastModified timestamp
+        if (jsonResponse.lastModified) {
+            localStorage.setItem(SYNC_METADATA_KEY, JSON.stringify({
+                lastModified: jsonResponse.lastModified,
+                syncedAt: new Date().toISOString()
+            }));
+        }
+
         // Handle different JSON structures (Array vs Object with data property)
         let data = [];
         if (Array.isArray(jsonResponse)) {
             data = jsonResponse;
         } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
+            data = jsonResponse.data;
+        } else if (jsonResponse.status === 'success' && jsonResponse.data) {
             data = jsonResponse.data;
         } else {
             console.error('❌ Unexpected JSON structure:', Object.keys(jsonResponse));
@@ -574,21 +672,21 @@ async function fetchOrdersFromGoogleSheet() {
             .map(row => mapGoogleSheetRowToOrder(row))
             .filter(cmd => {
                 if (!cmd.statut) return false;
-                
+
                 // Normalisation plus stricte pour comparaison
                 // Enlève les accents pour être sûr (prépa -> prepa)
                 const status = cmd.statut.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-                
+
                 // Filtre permissif : si le mot clé est DEDANS, on prend
                 if (status.includes('cours')) return true;   // En cours, En-cours...
                 if (status.includes('prepa')) return true;   // En prépa, Préparation...
                 if (status.includes('planifi')) return true; // Planifiée, Planifié...
-                
+
                 return false;
             });
 
         console.log(`✅ Orders fetched (Live): ${fetchedOrders.length} active orders`);
-        
+
         if (fetchedOrders.length === 0 && data.length > 0) {
             console.warn("⚠️ Attention : 0 commande chargée alors que le Sheet contient des données. Vérifiez les statuts.");
         }
@@ -2514,6 +2612,7 @@ function renderVueJournee() {
                                 ...slot,
                                 commandeId: cmd.id,
                                 client: cmd.client,
+                                refCdeClient: cmd.refCdeClient || '',
                                 operationType: op.type,
                                 commandeRef: cmd,
                                 operationRef: op,
@@ -2683,6 +2782,7 @@ function renderVueJournee() {
                                 <span class="slot-time" style="font-weight: bold;">${slot.heureDebut}-${slot.heureFin}</span>
                                 <span class="slot-client" style="font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-left: 5px; flex: 1; text-align: right;">${slot.client}</span>
                             </div>
+                            ${slot.refCdeClient ? `<div class="slot-ref" style="font-size: 1.1em; font-weight: 800; color: #fff; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${slot.refCdeClient}</div>` : ''}
                             <div class="slot-label" style="text-align: center; width: 100%; font-weight: 800; font-size: 1.1em; margin-top: 2px;">${slot.commandeId.substring(5)}</div>
                         </div>
                     `;
@@ -2881,7 +2981,7 @@ function renderCommandesNonPlacees(searchQuery = '') {
                 </div>
                 <div class="commande-details">
                     <div class="detail-item">
-                        <strong>Poids:</strong> ${cmd.poids}kg ${cmd.materiau}
+                        <strong>Ref:</strong> ${cmd.refCdeClient || '-'}
                     </div>
                     <div class="detail-item">
                         <strong>Livraison:</strong> ${formatDate(cmd.dateLivraison)} (${daysUntil} jours)
@@ -4180,16 +4280,24 @@ class DataSyncManager {
     }
 
     // Méthode 3: Sync avec Google Sheets
-    async syncWithGoogleSheets() {
+    async syncWithGoogleSheets(forceRefresh = false) {
         this.updateSyncIndicator('syncing', 'Synchronisation...');
-        
+
         try {
-            const remoteData = await fetchOrdersFromGoogleSheet();
-            
+            const remoteData = await fetchOrdersFromGoogleSheet(forceRefresh);
+
+            // Handle "unchanged" response (null means no changes)
+            if (remoteData === null) {
+                this.updateSyncIndicator('synced', 'À jour');
+                this.lastSyncTime = new Date();
+                console.log('✅ Sync complete - no changes detected');
+                return;
+            }
+
             if (remoteData && remoteData.length > 0) {
                 // Merge logic
                 this.mergeData(commandes, remoteData);
-                
+
                 this.saveLocalData();
                 this.updateSyncIndicator('synced', 'Synchronisé');
                 this.lastSyncTime = new Date();
@@ -4203,6 +4311,13 @@ class DataSyncManager {
             this.updateSyncIndicator('error', 'Erreur Sync (Mode Hors ligne)');
             Toast.warning('Synchronisation échouée. Mode hors ligne activé.');
         }
+    }
+
+    // Force full sync (bypass all caches)
+    async forceFullSync() {
+        localStorage.removeItem(SYNC_METADATA_KEY);
+        Toast.info('Synchronisation complète en cours...');
+        await this.syncWithGoogleSheets(true);
     }
 
     // Méthode 5: Merge intelligent

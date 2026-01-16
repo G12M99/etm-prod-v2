@@ -18,7 +18,7 @@
     --color-secondary: #6c757d;
     --color-background: #f8f9fa;
     --color-surface: #ffffff;
-    --color-border: #dee2e6;
+    --color-border: #6c757d;
     --color-text: #212529;
     --color-text-secondary: #6c757d;
 
@@ -880,7 +880,6 @@ body {
     background-color: var(--color-surface);
     border-radius: var(--border-radius);
     margin: var(--spacing-lg);
-    overflow: hidden;
     box-shadow: var(--shadow-sm);
 }
 
@@ -891,6 +890,10 @@ body {
     display: flex;
     align-items: center;
     gap: var(--spacing-lg);
+    position: sticky;
+    top: 0;
+    z-index: 90;
+    min-height: 80px;
 }
 
 .journee-header h2 {
@@ -904,6 +907,9 @@ body {
     grid-template-columns: 200px repeat(5, 1fr);
     background-color: #f8f9fa;
     border-bottom: 2px solid var(--color-border);
+    position: sticky;
+    top: 80px;
+    z-index: 85;
 }
 
 .day-header-cell {
@@ -967,6 +973,38 @@ body {
     border: 2px dashed var(--color-primary);
 }
 
+/* ===================================
+   Machine Type Background Colors
+   =================================== */
+
+/* Fond vert très clair pour les cisailles */
+.day-cell.machine-type-cisaillage {
+    background-color: rgba(22, 195, 85, 0.18) !important;
+}
+
+/* Fond orange très clair pour les poinçonneuses */
+.day-cell.machine-type-poinconnage {
+    background-color: rgba(253, 126, 20, 0.18) !important;
+}
+
+/* Fond violet très clair pour les plieuses */
+.day-cell.machine-type-pliage {
+    background-color: rgba(111, 66, 193, 0.18) !important;
+}
+
+/* Override friday style - opacité légèrement plus élevée */
+.day-cell.friday.machine-type-cisaillage {
+    background-color: rgba(22, 195, 85, 0.22) !important;
+}
+
+.day-cell.friday.machine-type-poinconnage {
+    background-color: rgba(253, 126, 20, 0.22) !important;
+}
+
+.day-cell.friday.machine-type-pliage {
+    background-color: rgba(111, 66, 193, 0.22) !important;
+}
+
 /* Timeline with absolute positioning */
 .timeline-container {
     flex: 1;
@@ -985,21 +1023,21 @@ body {
     display: flex;
     height: 30px;
     min-height: 30px;
-    border-bottom: 1px solid #e9ecef; /* Solid line for hour/half-hour bottom */
+    border-bottom: 1px solid #adb5bd;
     transition: background-color 0.2s;
     position: relative;
-    box-sizing: border-box; /* Ensure border is included in height */
+    box-sizing: border-box;
 }
 
-/* Style spécifique pour les créneaux de demi-heure (visuellement connectés à l'heure du dessus) */
+/* Style spécifique pour les créneaux de demi-heure */
 .time-slot.half-hour {
-    border-top: 1px dotted #e9ecef; /* Dotted line separation from the full hour */
-    border-bottom: 1px solid #dee2e6; /* Stronger line closing the hour block */
+    border-top: 1px dotted #e9ecef;
+    border-bottom: 1px solid #dee2e6;
 }
 
-/* Style pour l'heure pleine (début d'heure) */
+/* Style pour l'heure pleine */
 .time-slot.full-hour {
-    border-bottom: none; /* No bottom border, let the half-hour dot it */
+    border-bottom: none;
 }
 
 .time-slot:hover {
@@ -1167,12 +1205,12 @@ body {
     right: 0;
     background: repeating-linear-gradient(
         45deg,
-        #e0e0e0,
-        #e0e0e0 5px,
-        #f5f5f5 5px,
-        #f5f5f5 10px
+        #95a5a6,
+        #95a5a6 5px,
+        #b8c4c5 5px,
+        #b8c4c5 10px
     );
-    opacity: 0.6;
+    opacity: 0.7;
     z-index: 5;
     pointer-events: none; /* Let clicks pass through to slots underneath if any */
     border-top: 1px dashed #ccc;

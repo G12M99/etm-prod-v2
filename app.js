@@ -15,6 +15,34 @@ const ALL_MACHINES = [
     ...MACHINES.plieuses
 ];
 
+/**
+ * Détermine le type de machine basé sur son nom
+ * @param {string} machineName - Le nom de la machine
+ * @returns {string|null} 'cisaillage', 'poinconnage', 'pliage', ou null
+ */
+function getMachineType(machineName) {
+    if (MACHINES.cisailles.includes(machineName)) {
+        return 'cisaillage';
+    }
+    if (MACHINES.poinconneuses.includes(machineName)) {
+        return 'poinconnage';
+    }
+    if (MACHINES.plieuses.includes(machineName)) {
+        return 'pliage';
+    }
+    return null;
+}
+
+/**
+ * Retourne la classe CSS appropriée pour une machine
+ * @param {string} machineName - Le nom de la machine
+ * @returns {string} La classe CSS (ex: 'machine-type-cisaillage')
+ */
+function getMachineTypeClass(machineName) {
+    const type = getMachineType(machineName);
+    return type ? `machine-type-${type}` : '';
+}
+
 const HOURS_PER_DAY = {
     'Lundi': 8.5,      // 07:30-12:30 (5h) + 13:00-16:30 (3.5h)
     'Mardi': 8.5,
@@ -2511,7 +2539,6 @@ function renderVueJournee() {
         headersHtml += '<div class="day-header-cell machine-col">Machine</div>';
         DAYS_OF_WEEK.forEach((day, index) => {
             const capacity = HOURS_PER_DAY[day];
-            const timeRange = day === 'Vendredi' ? '07h-12h' : '07h30-16h30';
 
             // Calculer la date pour ce jour
             const dateObj = getDateFromWeekDay(semaineSelectionnee, day, "00:00", anneeSelectionnee);
@@ -2522,7 +2549,6 @@ function renderVueJournee() {
             headersHtml += `
                 <div class="day-header-cell day-col ${day === 'Vendredi' ? 'friday' : ''}">
                     <div class="day-name">${day} <span style="font-weight: normal; opacity: 0.8; font-size: 0.9em;">${formattedDate}</span></div>
-                    <div class="day-capacity">${timeRange} (${capacity}h)</div>
                 </div>
             `;
         });
@@ -2569,7 +2595,7 @@ function renderVueJournee() {
             const endHourTimeline = day === 'Vendredi' ? 12 : 16.5;
 
             html += `
-                <div class="day-cell ${day === 'Vendredi' ? 'friday' : ''}"
+                <div class="day-cell ${day === 'Vendredi' ? 'friday' : ''} ${getMachineTypeClass(machine)}"
                      data-machine="${machine}"
                      data-day="${day}"
                      data-week="${semaineSelectionnee}">
@@ -2584,7 +2610,7 @@ function renderVueJournee() {
                             <span class="${isOverCapacity ? 'text-danger' : ''}">
                                 ${Math.round(capacityInfo.heuresUtilisees * 10) / 10}h / ${capacityInfo.capaciteJour}h
                             </span>
-                            <span>${isOverCapacity ? '🔥 HEURES SUP' : ''}</span>
+                            <span>${isOverCapacity ? ' HEURES SUP' : ''}</span>
                         </div>
                         <div class="stat-progress">
                             <div class="stat-progress-bar ${capacityClass}" style="width: ${Math.min(100, Math.round(capacityInfo.pourcentage))}%"></div>
@@ -3200,7 +3226,7 @@ function replanifierOperationsSuivantes(cmd, modifiedOp) {
 
         // 4. Resolve Conflict: Replan
         if (isConflict) {
-            console.log(`🔄 Cascade: Décalage nécessaire pour ${currentType} (Conflit avec ${previousOp.type})`);
+            console.log(`Cascade: Décalage nécessaire pour ${currentType} (Conflit avec ${previousOp.type})`);
             
             // Unplan completely
             currentOp.slots = [];
@@ -3845,7 +3871,7 @@ async function placerAutomatiquement(commandeId) {
             // 🔒 Assign machine on first placement
             if (!assignedMachine) {
                 assignedMachine = bestSlot.machine;
-                console.log(`🎯 Machine assignée pour ${operation.type}: ${assignedMachine}`);
+                console.log(`Machine assignée pour ${operation.type}: ${assignedMachine}`);
             }
 
             // 📊 Check if we can fit the remaining duration with overtime

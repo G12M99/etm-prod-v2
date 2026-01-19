@@ -2,18 +2,28 @@
 // ETM PROD V2 - Application Logic
 // ===================================
 
-// Configuration
-const MACHINES = {
-    cisailles: ['Cisaille A', 'Cisaille B'],
-    poinconneuses: ['Poinçonneuse M', 'Poinçonneuse T'],
-    plieuses: ['Plieuse Lo', 'Plieuse Mik', 'Plieuse Mok']
+// Configuration des machines - Clone mutable de la configuration
+const MACHINES_STORAGE_KEY = 'etm_machines_config';
+let machinesConfig = JSON.parse(JSON.stringify(MACHINES_CONFIG));
+
+// Variables de compatibilité avec le code existant
+let MACHINES = {
+    cisailles: machinesConfig.cisaillage.filter(m => m.active).map(m => m.name),
+    poinconneuses: machinesConfig.poinconnage.filter(m => m.active).map(m => m.name),
+    plieuses: machinesConfig.pliage.filter(m => m.active).map(m => m.name)
 };
 
-const ALL_MACHINES = [
-    ...MACHINES.cisailles,
-    ...MACHINES.poinconneuses,
-    ...MACHINES.plieuses
-];
+let ALL_MACHINES = [...MACHINES.cisailles, ...MACHINES.poinconneuses, ...MACHINES.plieuses];
+
+/**
+ * Recharge les tableaux MACHINES et ALL_MACHINES depuis machinesConfig
+ */
+function reloadMachineArrays() {
+    MACHINES.cisailles = machinesConfig.cisaillage.filter(m => m.active).map(m => m.name);
+    MACHINES.poinconneuses = machinesConfig.poinconnage.filter(m => m.active).map(m => m.name);
+    MACHINES.plieuses = machinesConfig.pliage.filter(m => m.active).map(m => m.name);
+    ALL_MACHINES = [...MACHINES.cisailles, ...MACHINES.poinconneuses, ...MACHINES.plieuses];
+}
 
 /**
  * Détermine le type de machine basé sur son nom
@@ -8882,10 +8892,14 @@ async function init() {
     semaineSelectionnee = getWeekNumber(currentTime);
     anneeSelectionnee = currentTime.getFullYear();
 
+    // Charger la configuration des machines depuis localStorage
+    loadMachinesConfig();
+
     // Safe initialization of UI components
     if (typeof updateCurrentTime === 'function') updateCurrentTime();
     if (typeof initEventHandlers === 'function') initEventHandlers();
     if (typeof initSyncHandlers === 'function') initSyncHandlers();
+    if (typeof initMachineManagerHandlers === 'function') initMachineManagerHandlers();
 
     // Start clock (Real-time update)
     setInterval(() => {
@@ -8958,3 +8972,441 @@ if (document.readyState === 'loading') {
 window.placerAutomatiquement = placerAutomatiquement;
 window.showCommandeDetails = showCommandeDetails;
 window.toggleVue = toggleVue;
+
+// ===================================
+// Machine Management System
+// ===================================
+
+/**
+ * Charge la configuration des machines depuis localStorage
+ */
+function loadMachinesConfig() {
+    try {
+        const stored = localStorage.getItem(MACHINES_STORAGE_KEY);
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            // Valider la structure
+            if (parsed.cisaillage && parsed.poinconnage && parsed.pliage) {
+                machinesConfig = parsed;
+                console.log('✅ Configuration machines chargée depuis localStorage');
+            }
+        }
+    } catch (e) {
+        console.error('Erreur chargement config machines:', e);
+    }
+    reloadMachineArrays();
+}
+
+/**
+ * Sauvegarde la configuration des machines dans localStorage
+ */
+function saveMachinesConfig() {
+    try {
+        localStorage.setItem(MACHINES_STORAGE_KEY, JSON.stringify(machinesConfig));
+        console.log('✅ Configuration machines sauvegardée');
+    } catch (e) {
+        console.error('Erreur sauvegarde config machines:', e);
+        Toast.error('Erreur lors de la sauvegarde');
+    }
+}
+
+/**
+ * Ouvre le modal de gestion des machines
+ */
+function openMachineManager() {
+    const modal = document.getElementById('modalMachines');
+    if (modal) {
+        renderMachinesManager();
+        modal.classList.add('active');
+    }
+}
+
+/**
+ * Ferme le modal de gestion des machines
+ */
+function closeMachineManager() {
+    const modal = document.getElementById('modalMachines');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+/**
+ * Affiche la liste des machines dans le gestionnaire
+ */
+function renderMachinesManager() {
+    const container = document.getElementById('machinesManagerContent');
+    if (!container) return;
+
+    const categories = [
+        { key: 'cisaillage', label: 'Cisaillage', color: '#4ade80' },
+        { key: 'poinconnage', label: 'Poinçonnage', color: '#f97316' },
+        { key: 'pliage', label: 'Pliage', color: '#a855f7' }
+    ];
+
+    let html = '';
+
+    categories.forEach(cat => {
+        const machines = machinesConfig[cat.key] || [];
+        html += `
+            <div class="machine-section">
+                <div class="machine-section-header">
+                    <h3 style="color: ${cat.color};">${cat.label}</h3>
+                    <button class="btn btn-sm btn-primary" onclick="openMachineEdit(null, '${cat.key}')">+ Ajouter</button>
+                </div>
+                <div class="machines-list">
+        `;
+
+        if (machines.length === 0) {
+            html += `<p class="no-machines">Aucune machine dans cette catégorie</p>`;
+        } else {
+            machines.forEach(machine => {
+                const statusClass = machine.active ? 'status-active' : 'status-inactive';
+                const statusLabel = machine.active ? 'Active' : 'Inactive';
+                html += `
+                    <div class="machine-item" onclick="openMachineEdit('${machine.id}', '${cat.key}')">
+                        <div class="machine-color" style="background: ${machine.color};"></div>
+                        <div class="machine-info">
+                            <span class="machine-name">${machine.name}</span>
+                            <span class="machine-details">${machine.capacity}h/jour</span>
+                        </div>
+                        <span class="machine-status ${statusClass}">${statusLabel}</span>
+                    </div>
+                `;
+            });
+        }
+
+        html += `
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+/**
+ * Ouvre le modal d'édition/ajout d'une machine
+ * @param {string|null} machineId - ID de la machine (null pour ajout)
+ * @param {string} category - Catégorie de la machine
+ */
+function openMachineEdit(machineId, category) {
+    const modal = document.getElementById('modalMachineEdit');
+    const title = document.getElementById('machineEditTitle');
+    const form = document.getElementById('formMachineEdit');
+    const deleteBtn = document.getElementById('btnDeleteMachine');
+
+    if (!modal || !form) return;
+
+    // Reset form
+    form.reset();
+
+    // Set hidden fields
+    document.getElementById('machineEditId').value = machineId || '';
+    document.getElementById('machineEditCategory').value = category;
+
+    if (machineId) {
+        // Mode édition
+        title.textContent = 'Modifier la machine';
+        deleteBtn.style.display = 'block';
+
+        const machines = machinesConfig[category] || [];
+        const machine = machines.find(m => m.id === machineId);
+
+        if (machine) {
+            document.getElementById('machineEditOriginalName').value = machine.name;
+            document.getElementById('machineEditName').value = machine.name;
+            document.getElementById('machineEditCapacity').value = machine.capacity;
+            document.getElementById('machineEditColor').value = machine.color;
+            document.getElementById('machineEditActive').value = machine.active ? 'true' : 'false';
+        }
+    } else {
+        // Mode ajout
+        title.textContent = 'Ajouter une machine';
+        deleteBtn.style.display = 'none';
+        document.getElementById('machineEditOriginalName').value = '';
+
+        // Couleur par défaut selon catégorie
+        const defaultColors = {
+            cisaillage: '#4ade80',
+            poinconnage: '#f97316',
+            pliage: '#a855f7'
+        };
+        document.getElementById('machineEditColor').value = defaultColors[category] || '#4ade80';
+    }
+
+    modal.classList.add('active');
+}
+
+/**
+ * Ferme le modal d'édition de machine
+ */
+function closeMachineEdit() {
+    const modal = document.getElementById('modalMachineEdit');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+/**
+ * Sauvegarde les modifications d'une machine
+ */
+function saveMachineEdit() {
+    const machineId = document.getElementById('machineEditId').value;
+    const category = document.getElementById('machineEditCategory').value;
+    const originalName = document.getElementById('machineEditOriginalName').value;
+    const name = document.getElementById('machineEditName').value.trim();
+    const capacity = parseFloat(document.getElementById('machineEditCapacity').value);
+    const color = document.getElementById('machineEditColor').value;
+    const active = document.getElementById('machineEditActive').value === 'true';
+
+    if (!name) {
+        Toast.error('Le nom de la machine est requis');
+        return;
+    }
+
+    const machines = machinesConfig[category];
+    if (!machines) {
+        Toast.error('Catégorie invalide');
+        return;
+    }
+
+    if (machineId) {
+        // Mode édition
+        const index = machines.findIndex(m => m.id === machineId);
+        if (index !== -1) {
+            const oldName = machines[index].name;
+            const wasActive = machines[index].active === true || machines[index].active === 'true';
+
+            machines[index] = {
+                ...machines[index],
+                name,
+                capacity,
+                color,
+                active
+            };
+
+            // Si le nom a changé, mettre à jour les opérations planifiées
+            if (oldName !== name) {
+                updateOperationsMachineName(oldName, name);
+            }
+
+            // Si la machine passe de active à inactive, désaffecter les opérations
+            if (wasActive && !active) {
+                unassignOperationsFromMachine(oldName);
+            }
+
+            Toast.success('Machine modifiée avec succès');
+        }
+    } else {
+        // Mode ajout
+        const newId = `${category}-${Date.now()}`;
+        machines.push({
+            id: newId,
+            name,
+            capacity,
+            color,
+            active
+        });
+        Toast.success('Machine ajoutée avec succès');
+    }
+
+    saveMachinesConfig();
+    reloadMachineArrays();
+    closeMachineEdit();
+    renderMachinesManager();
+    refresh();
+}
+
+/**
+ * Supprime une machine
+ */
+function deleteMachine() {
+    const machineId = document.getElementById('machineEditId').value;
+    const category = document.getElementById('machineEditCategory').value;
+    const machineName = document.getElementById('machineEditName').value;
+
+    if (!machineId || !category) return;
+
+    // Vérifier si des opérations sont planifiées sur cette machine
+    const hasPlannedOps = commandes.some(cmd =>
+        cmd.operations?.some(op =>
+            op.slots?.some(slot => slot.machine === machineName)
+        )
+    );
+
+    let confirmMessage = `Êtes-vous sûr de vouloir supprimer la machine "${machineName}" ?`;
+    if (hasPlannedOps) {
+        confirmMessage += '\n\n⚠️ ATTENTION: Des opérations sont planifiées sur cette machine. Elles seront désaffectées.';
+    }
+
+    if (!confirm(confirmMessage)) return;
+
+    const machines = machinesConfig[category];
+    const index = machines.findIndex(m => m.id === machineId);
+
+    if (index !== -1) {
+        machines.splice(index, 1);
+
+        // Désaffecter les opérations de cette machine
+        if (hasPlannedOps) {
+            unassignOperationsFromMachine(machineName);
+        }
+
+        saveMachinesConfig();
+        reloadMachineArrays();
+        closeMachineEdit();
+        renderMachinesManager();
+        refresh();
+        Toast.success('Machine supprimée');
+    }
+}
+
+/**
+ * Met à jour le nom de machine dans les opérations planifiées (dans les slots)
+ * @param {string} oldName - Ancien nom
+ * @param {string} newName - Nouveau nom
+ */
+function updateOperationsMachineName(oldName, newName) {
+    let updated = 0;
+    commandes.forEach(cmd => {
+        cmd.operations?.forEach(op => {
+            op.slots?.forEach(slot => {
+                if (slot.machine === oldName) {
+                    slot.machine = newName;
+                    updated++;
+                }
+            });
+        });
+    });
+
+    if (updated > 0) {
+        syncManager.saveLocalData();
+    }
+}
+
+/**
+ * Désaffecte TOUTES les opérations des commandes qui ont au moins une opération sur la machine inactive
+ * Les commandes gardent leur semaineAffectee mais perdent tous leurs slots
+ * @param {string} machineName - Nom de la machine
+ */
+function unassignOperationsFromMachine(machineName) {
+    let commandesAffectees = 0;
+    let operationsDesaffectees = 0;
+
+    commandes.forEach(cmd => {
+        // Vérifier si la commande a au moins une opération sur cette machine
+        const hasOpOnMachine = cmd.operations?.some(op =>
+            op.slots?.some(slot => slot.machine === machineName)
+        );
+
+        if (!hasOpOnMachine) return;
+
+        commandesAffectees++;
+
+        // Récupérer la semaine depuis le premier slot trouvé (avant de tout vider)
+        if (!cmd.semaineAffectee) {
+            for (const op of cmd.operations || []) {
+                if (op.slots && op.slots.length > 0 && op.slots[0].semaine) {
+                    cmd.semaineAffectee = op.slots[0].semaine;
+                    break;
+                }
+            }
+        }
+
+        // Désaffecter TOUTES les opérations de cette commande
+        cmd.operations?.forEach(op => {
+            if (op.slots && op.slots.length > 0) {
+                op.slots = [];
+                operationsDesaffectees++;
+            }
+        });
+
+        // Mettre à jour le statut
+        if (cmd.statut === 'Planifiée') {
+            cmd.statut = 'En attente';
+        }
+    });
+
+    if (commandesAffectees > 0) {
+        syncManager.saveLocalData();
+        Toast.warning(`${commandesAffectees} commande(s) désaffectée(s) (${operationsDesaffectees} opérations)`);
+    }
+}
+
+/**
+ * Réinitialise la configuration des machines
+ */
+function resetMachinesConfig() {
+    if (!confirm('Êtes-vous sûr de vouloir réinitialiser la configuration des machines ?\n\nCela restaurera les machines par défaut.')) {
+        return;
+    }
+
+    localStorage.removeItem(MACHINES_STORAGE_KEY);
+    machinesConfig = JSON.parse(JSON.stringify(MACHINES_CONFIG));
+    reloadMachineArrays();
+    renderMachinesManager();
+    refresh();
+    Toast.success('Configuration réinitialisée');
+}
+
+/**
+ * Exporte la configuration des machines en fichier JSON
+ */
+function exportMachinesConfig() {
+    const dataStr = JSON.stringify(machinesConfig, null, 2);
+    const blob = new Blob([`const MACHINES_CONFIG = ${dataStr};\nObject.freeze(MACHINES_CONFIG);`], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'config.js';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    Toast.success('Configuration exportée');
+}
+
+/**
+ * Initialise les event listeners du gestionnaire de machines
+ */
+function initMachineManagerHandlers() {
+    // Bouton ouvrir
+    document.getElementById('btnManageMachines')?.addEventListener('click', openMachineManager);
+
+    // Boutons fermer modal principal
+    document.getElementById('btnCloseMachines')?.addEventListener('click', closeMachineManager);
+    document.getElementById('btnCloseMachinesBottom')?.addEventListener('click', closeMachineManager);
+
+    // Boutons actions
+    document.getElementById('btnResetMachines')?.addEventListener('click', resetMachinesConfig);
+    document.getElementById('btnExportMachines')?.addEventListener('click', exportMachinesConfig);
+
+    // Modal édition - fermer
+    document.getElementById('btnCloseMachineEdit')?.addEventListener('click', closeMachineEdit);
+    document.getElementById('btnCancelMachineEdit')?.addEventListener('click', closeMachineEdit);
+
+    // Modal édition - supprimer
+    document.getElementById('btnDeleteMachine')?.addEventListener('click', deleteMachine);
+
+    // Modal édition - formulaire
+    document.getElementById('formMachineEdit')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveMachineEdit();
+    });
+
+    // Fermer modals en cliquant en dehors
+    document.getElementById('modalMachines')?.addEventListener('click', (e) => {
+        if (e.target.id === 'modalMachines') closeMachineManager();
+    });
+
+    document.getElementById('modalMachineEdit')?.addEventListener('click', (e) => {
+        if (e.target.id === 'modalMachineEdit') closeMachineEdit();
+    });
+}
+
+// Exposer les fonctions globalement
+window.openMachineEdit = openMachineEdit;
+window.closeMachineEdit = closeMachineEdit;

@@ -72,6 +72,13 @@
                                                         Nettoyer commandes archivées
                                                     </button>
                                                     <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
+                                                    <button id="btnManageMachines" title="Gérer les machines (ajout/modification/suppression)">
+                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                            <path d="M13.5 8.5a.5.5 0 01.5.5v4.5a1 1 0 01-1 1H3a1 1 0 01-1-1V9a.5.5 0 011 0v4.5h10V9a.5.5 0 01.5-.5zM8 1a3 3 0 013 3v1h1.5a.5.5 0 01.5.5v2a.5.5 0 01-1 0V6H4v1.5a.5.5 0 01-1 0v-2A.5.5 0 013.5 5H5V4a3 3 0 013-3zm2 4V4a2 2 0 10-4 0v1h4z" fill="currentColor"/>
+                                                        </svg>
+                                                        Gérer les machines
+                                                    </button>
+                                                    <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
                                                     <div id="storageIndicator" style="padding: 6px 10px; font-size: 12px; color: var(--color-text-muted); display: flex; align-items: center; gap: 6px;">
                                                         <span id="storageText">-- KB / 5 MB</span>
                                                     </div>
@@ -436,6 +443,74 @@
         </div>
     </div>
 
+    <!-- Modal: Machine Manager -->
+    <div class="modal" id="modalMachines">
+        <div class="modal-content modal-machines-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Gestion des Machines</h2>
+                <button class="btn-close" id="btnCloseMachines">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="machinesManagerContent">
+                    <!-- Populated by JS -->
+                </div>
+                <div class="modal-actions" style="margin-top: 20px;">
+                    <button class="btn btn-secondary" id="btnResetMachines">Réinitialiser</button>
+                    <button class="btn btn-secondary" id="btnExportMachines">Exporter config</button>
+                    <button class="btn btn-secondary" id="btnCloseMachinesBottom">Fermer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Machine Edit/Add -->
+    <div class="modal" id="modalMachineEdit">
+        <div class="modal-content modal-machine-edit-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="machineEditTitle">Modifier la machine</h2>
+                <button class="btn-close" id="btnCloseMachineEdit">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="formMachineEdit">
+                    <input type="hidden" id="machineEditId">
+                    <input type="hidden" id="machineEditCategory">
+                    <input type="hidden" id="machineEditOriginalName">
+
+                    <div class="form-group">
+                        <label for="machineEditName">Nom de la machine</label>
+                        <input type="text" id="machineEditName" placeholder="Ex: Cisaille C" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="machineEditCapacity">Capacité (h/jour)</label>
+                        <input type="number" id="machineEditCapacity" step="0.5" min="0" max="24" value="8.5" required>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="machineEditColor">Couleur</label>
+                            <input type="color" id="machineEditColor" value="#4ade80">
+                        </div>
+                        <div class="form-group">
+                            <label for="machineEditActive">Statut</label>
+                            <select id="machineEditActive">
+                                <option value="true">Active</option>
+                                <option value="false">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-danger" id="btnDeleteMachine" style="margin-right: auto;">Supprimer</button>
+                        <button type="button" class="btn btn-secondary" id="btnCancelMachineEdit">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Enregistrer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

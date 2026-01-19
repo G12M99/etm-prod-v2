@@ -3430,3 +3430,135 @@ body.dragging-desaffectation .sidebar-dropzone-desaffect {
     font-weight: 600;
 }
 
+/* ===================================
+   Machine Manager Modal
+   =================================== */
+
+.modal-machines-content {
+    max-width: 600px;
+}
+
+.machine-section {
+    margin-bottom: 24px;
+}
+
+.machine-section:last-child {
+    margin-bottom: 0;
+}
+
+.machine-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--color-border);
+}
+
+.machine-section-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.machines-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.machine-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--color-background);
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+}
+
+.machine-item:hover {
+    background: #e9ecef;
+    border-color: var(--color-border);
+}
+
+.machine-color {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.machine-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.machine-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--color-text);
+}
+
+.machine-details {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+.machine-status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.machine-status.status-active {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.machine-status.status-inactive {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.no-machines {
+    color: var(--color-text-secondary);
+    font-style: italic;
+    padding: 12px;
+    text-align: center;
+}
+
+/* Machine Edit Modal */
+.modal-machine-edit-content {
+    max-width: 400px;
+}
+
+.modal-machine-edit-content .form-group input[type="color"] {
+    width: 100%;
+    height: 44px;
+    padding: 4px;
+    cursor: pointer;
+}
+
+.modal-machine-edit-content .form-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.modal-machine-edit-content .btn-danger {
+    background-color: #dc3545;
+    border-color: #dc3545;
+    color: white;
+}
+
+.modal-machine-edit-content .btn-danger:hover {
+    background-color: #c82333;
+    border-color: #bd2130;
+}
+

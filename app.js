@@ -258,6 +258,62 @@ function migrateOperationOverrideFields() {
     return false;
 }
 
+// ===================================
+// Migration du champ semaineAffectee (Workflow 2 étapes)
+// ===================================
+
+/**
+ * Migration des commandes existantes pour ajouter le champ semaineAffectee
+ * Les commandes avec des opérations déjà placées seront affectées à leur semaine
+ * Les commandes sans slots auront semaineAffectee = null
+ */
+function migrateCommandesSemaineAffectee() {
+    let migratedCount = 0;
+
+    commandes.forEach(cmd => {
+        // Si le champ existe déjà, ne pas migrer
+        if (cmd.semaineAffectee !== undefined) return;
+
+        // Vérifier si des opérations sont déjà placées
+        const hasPlacedSlots = cmd.operations?.some(op =>
+            op.slots && op.slots.length > 0
+        );
+
+        if (hasPlacedSlots) {
+            // Trouver le premier slot pour déterminer la semaine
+            const allSlots = cmd.operations
+                .flatMap(op => op.slots || [])
+                .filter(slot => slot.semaine && slot.dateDebut);
+
+            if (allSlots.length > 0) {
+                // Trier par date pour avoir le premier
+                allSlots.sort((a, b) => new Date(a.dateDebut) - new Date(b.dateDebut));
+                const firstSlot = allSlots[0];
+
+                // Extraire l'année depuis dateDebut ou anneeSelectionnee
+                const slotDate = new Date(firstSlot.dateDebut);
+                const year = slotDate.getFullYear();
+                const week = firstSlot.semaine;
+
+                cmd.semaineAffectee = `${year}-W${String(week).padStart(2, '0')}`;
+            } else {
+                cmd.semaineAffectee = null;
+            }
+        } else {
+            // Pas de slots → commande non affectée
+            cmd.semaineAffectee = null;
+        }
+
+        migratedCount++;
+    });
+
+    if (migratedCount > 0) {
+        console.log(`✅ Migration semaineAffectee: ${migratedCount} commandes mises à jour`);
+        return true;
+    }
+    return false;
+}
+
 
 // ===================================
 // CSV Parsing Functions
@@ -523,7 +579,20 @@ class HistoryManager {
         console.log(`💾 State Saved: ${actionName} (Index: ${this.currentIndex})`);
         this.updateUI();
     }
-
+    // Vérifie l'espace utilisé et alerte si > 80%
+     checkStorageHealth() {
+        const used = new Blob(Object.values(localStorage)).size;
+        const max = 5 * 1024 * 1024; // 5MB
+        const percentUsed = (used / max * 100).toFixed(1);
+        
+        console.log(`💾 Stockage: ${percentUsed}% (${(used/1024).toFixed(1)} KB / 5 MB)`);
+        
+        if (percentUsed > 80) {
+            Toast.warning(`⚠️ Espace de stockage critique : ${percentUsed}%`);
+        }
+        
+        return { used, max, percentUsed };
+    }
     // Undo
     undo() {
         if (this.currentIndex > 0) {
@@ -1246,6 +1315,79 @@ function getUnplacedOrders() {
     });
 }
 
+// ===================================
+// Filtrage pour Workflow 2 étapes
+// ===================================
+
+/**
+ * Récupère les commandes non affectées à une semaine
+ * Utilisée dans la sidebar de la vue semaine
+ * @returns {Array} Commandes avec semaineAffectee === null
+ */
+function getCommandesNonAffectees() {
+    return commandes.filter(cmd => {
+        // Exclure les terminées/livrées
+        if (cmd.statut === 'Terminée' || cmd.statut === 'Livrée') return false;
+
+        // Inclure seulement celles sans affectation de semaine
+        return cmd.semaineAffectee === null || cmd.semaineAffectee === undefined;
+    });
+}
+
+/**
+ * Récupère les opérations non placées d'une semaine spécifique
+ * Utilisée dans la sidebar de la vue journée
+ * @param {number} semaine - Numéro de semaine (1-52)
+ * @param {number} annee - Année
+ * @returns {Array} Objets {commande, operation} des opérations non placées de cette semaine
+ */
+function getOperationsAffecteesSemaine(semaine, annee) {
+    const targetWeekStr = `${annee}-W${String(semaine).padStart(2, '0')}`;
+    const result = [];
+
+    commandes.forEach(cmd => {
+        // Vérifier l'affectation semaine
+        if (cmd.semaineAffectee !== targetWeekStr) return;
+
+        // Exclure les terminées/livrées
+        if (cmd.statut === 'Terminée' || cmd.statut === 'Livrée') return;
+
+        // Collecter les opérations non placées
+        cmd.operations.forEach(op => {
+            if (!op.slots || op.slots.length === 0) {
+                result.push({
+                    commande: cmd,
+                    operation: op
+                });
+            }
+        });
+    });
+
+    return result;
+}
+
+/**
+ * Récupère les commandes affectées à une semaine mais pas encore entièrement placées
+ * Utilisée pour afficher les commandes dans la ligne "À placer" de la vue semaine
+ * @param {number} semaine - Numéro de semaine (1-52)
+ * @param {number} annee - Année
+ * @returns {Array} Commandes affectées avec au moins une opération non placée
+ */
+function getCommandesAffecteesNonPlacees(semaine, annee) {
+    const targetWeekStr = `${annee}-W${String(semaine).padStart(2, '0')}`;
+
+    return commandes.filter(cmd => {
+        // Doit être affectée à cette semaine
+        if (cmd.semaineAffectee !== targetWeekStr) return false;
+
+        // Exclure les terminées/livrées
+        if (cmd.statut === 'Terminée' || cmd.statut === 'Livrée') return false;
+
+        // Doit avoir AU MOINS UNE opération non placée
+        return cmd.operations.some(op => !op.slots || op.slots.length === 0);
+    });
+}
+
 /**
  * Calculate machine capacity for a week
  */
@@ -1318,6 +1460,56 @@ function getCapacityColorClass(pourcentage) {
     if (pourcentage >= 96) return 'capacity-danger';
     if (pourcentage >= 76) return 'capacity-warning';
     return 'capacity-ok';
+}
+
+/**
+ * Calcule la capacité globale de la semaine (toutes machines confondues)
+ * Inclut les opérations placées ET les opérations affectées mais non placées
+ * @param {number} semaine - Numéro de semaine
+ * @param {number} annee - Année
+ * @returns {Object} { heuresAffectees, heuresPlacees, capaciteTotale, pourcentage }
+ */
+function calculerCapaciteSemaineGlobale(semaine, annee) {
+    const targetWeekStr = `${annee}-W${String(semaine).padStart(2, '0')}`;
+
+    // Capacité totale = toutes les machines * heures par semaine
+    const capaciteTotale = TOTAL_HOURS_PER_WEEK * ALL_MACHINES.length;
+
+    // 1. Heures des opérations PLACÉES sur cette semaine
+    const placedOrders = getPlacedOrders();
+    const heuresPlacees = placedOrders
+        .flatMap(cmd => cmd.operations)
+        .flatMap(op => op.slots || [])
+        .filter(slot => {
+            if (slot.semaine !== semaine) return false;
+            const slotYear = getISOWeekYear(slot.dateDebut);
+            return slotYear === annee;
+        })
+        .reduce((sum, slot) => sum + slot.duree, 0);
+
+    // 2. Heures des opérations AFFECTÉES mais NON PLACÉES
+    const commandesAffectees = commandes.filter(cmd => {
+        if (cmd.semaineAffectee !== targetWeekStr) return false;
+        if (cmd.statut === 'Terminée' || cmd.statut === 'Livrée') return false;
+        return true;
+    });
+
+    const heuresNonPlacees = commandesAffectees
+        .flatMap(cmd => cmd.operations)
+        .filter(op => !op.slots || op.slots.length === 0)
+        .reduce((sum, op) => sum + (op.dureeOverride || op.dureeTotal || 0), 0);
+
+    // Total affecté = placées + non placées
+    const heuresAffectees = heuresPlacees + heuresNonPlacees;
+    const pourcentage = Math.round((heuresAffectees / capaciteTotale) * 100);
+
+    return {
+        heuresAffectees,
+        heuresPlacees,
+        heuresNonPlacees,
+        capaciteTotale,
+        pourcentage
+    };
 }
 
 /**
@@ -2387,6 +2579,59 @@ function renderVueSemaine() {
     });
     html += '</div>';
 
+    // === LIGNE "À PLACER" : Commandes affectées mais non encore planifiées ===
+    html += '<div class="semaine-row semaine-row-aplacer">';
+    html += '<div class="machine-cell"><div class="machine-name">📋 À placer</div></div>';
+
+    weeksToDisplay.forEach((item, index) => {
+        const weekSeparatorClass = index > 0 ? 'week-separator' : '';
+        const commandesAffectees = getCommandesAffecteesNonPlacees(item.week, item.year);
+
+        // Calculer la capacité globale de la semaine
+        const capaciteGlobale = calculerCapaciteSemaineGlobale(item.week, item.year);
+        const capacityClass = getCapacityColorClass(capaciteGlobale.pourcentage);
+
+        html += `<div class="week-cell week-cell-aplacer drop-zone-semaine ${weekSeparatorClass}" data-week="${item.week}" data-year="${item.year}">`;
+
+        // Jauge de capacité globale
+        html += `
+            <div class="week-capacity-global">
+                <div class="capacity-bar-global">
+                    <div class="capacity-fill ${capacityClass}" style="width: ${Math.min(100, capaciteGlobale.pourcentage)}%"></div>
+                </div>
+                <span class="capacity-label-global" title="Placées: ${formatHours(capaciteGlobale.heuresPlacees)} | À placer: ${formatHours(capaciteGlobale.heuresNonPlacees)} | Capacité: ${formatHours(capaciteGlobale.capaciteTotale)}">
+                    ${formatHours(capaciteGlobale.heuresAffectees)} / ${formatHours(capaciteGlobale.capaciteTotale)} (${capaciteGlobale.pourcentage}%)
+                </span>
+            </div>
+        `;
+
+        // Badges des commandes affectées
+        html += '<div class="aplacer-badges">';
+        if (commandesAffectees.length === 0) {
+            html += '<span class="no-commands-hint">Aucune commande</span>';
+        } else {
+            commandesAffectees.forEach(cmd => {
+                const urgencyLevel = getUrgencyLevel(cmd.dateLivraison);
+                const opsRestantes = cmd.operations.filter(o => !o.slots || o.slots.length === 0).length;
+                const desaffectData = JSON.stringify({ commandeId: cmd.id, isDesaffectation: true });
+                html += `
+                    <span class="command-badge command-badge-aplacer ${urgencyLevel}"
+                          draggable="true"
+                          data-commande-desaffectation='${desaffectData}'
+                          title="${cmd.client} - Livraison: ${formatDate(cmd.dateLivraison)} (Glisser vers sidebar pour désaffecter)">
+                        <span class="badge-id">${cmd.id.substring(5)}</span>
+                        <span class="badge-ops">${opsRestantes} ops</span>
+                    </span>
+                `;
+            });
+        }
+        html += '</div>';
+
+        html += '</div>';
+    });
+
+    html += '</div>';
+
     // Rows for each machine
     ALL_MACHINES.forEach(machine => {
         html += '<div class="semaine-row">';
@@ -2421,7 +2666,7 @@ function renderVueSemaine() {
             const capacity = calculerCapaciteMachine(machine, item.week, item.year);
             const weekCapacityClass = getCapacityColorClass(capacity.pourcentage);
 
-            html += `<div class="week-cell ${weekSeparatorClass}" data-machine="${machine}" data-week="${item.week}" data-year="${item.year}">`;
+            html += `<div class="week-cell drop-zone-semaine ${weekSeparatorClass}" data-machine="${machine}" data-week="${item.week}" data-year="${item.year}">`;
 
             // Capacity gauge at top of cell
             html += `
@@ -2478,15 +2723,34 @@ function renderVueSemaine() {
     // Add click handlers on week cells
     document.querySelectorAll('.week-cell').forEach(cell => {
         cell.addEventListener('click', (e) => {
+            // Ignorer si on vient de faire un drop
+            if (e.target.closest('.dragging')) return;
+
             const week = parseInt(e.currentTarget.getAttribute('data-week'));
             const year = parseInt(e.currentTarget.getAttribute('data-year'));
-            
+
             // Update both week and year global state
             semaineSelectionnee = week;
             anneeSelectionnee = year;
-            
+
             toggleVue('journee');
         });
+    });
+
+    // Add drag & drop handlers for week cells (affectation commandes)
+    document.querySelectorAll('.drop-zone-semaine').forEach(cell => {
+        cell.addEventListener('dragover', (e) => {
+            // Accepter seulement les commandes (pas les opérations)
+            if (draggedOperation && draggedOperation.isCommandeAffectation) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                e.currentTarget.classList.add('drag-over');
+            }
+        });
+        cell.addEventListener('dragleave', (e) => {
+            e.currentTarget.classList.remove('drag-over');
+        });
+        cell.addEventListener('drop', handleWeekCellDrop);
     });
 }
 
@@ -2510,7 +2774,7 @@ function renderVueJournee() {
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                     <path d="M12 4l-8 6 8 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
-                Retour Vue Semaine
+                Retour 3 Semaines
             </button>
 
             <div style="display:flex; align-items:center; gap:20px;">
@@ -2903,38 +3167,63 @@ function renderVueJournee() {
 // UI Rendering - Commandes Non Placées
 // ===================================
 
-/**
- * Render unplaced orders
- * @param {string} searchQuery - Optional search query to filter commands
- */
-function renderCommandesNonPlacees(searchQuery = '') {
-    const container = document.getElementById('unplacedOrdersContainer');
-    const unplacedOrders = getUnplacedOrders();
+// ===================================
+// Sidebar Workflow 2 étapes
+// ===================================
 
-    // Sort by dateLivraison (urgent first)
-    unplacedOrders.sort((a, b) => {
-        const dateA = a.dateLivraison ? new Date(a.dateLivraison) : new Date(8640000000000000); // Max Date
+/**
+ * Fonction de dispatch pour la sidebar selon la vue active
+ * @param {string} searchQuery - Requête de recherche optionnelle
+ */
+function renderSidebarContent(searchQuery = '') {
+    const titleEl = document.querySelector('.sidebar-title');
+
+    if (vueActive === 'semaine') {
+        // Vue Semaine: afficher les commandes à affecter
+        if (titleEl) titleEl.textContent = 'Commandes à affecter';
+        renderSidebarVueSemaine(searchQuery);
+    } else if (vueActive === 'journee') {
+        // Vue Journée: afficher les opérations de la semaine sélectionnée
+        if (titleEl) titleEl.textContent = `Opérations S${semaineSelectionnee}`;
+        renderSidebarVueJournee(searchQuery);
+    } else {
+        // Vue Liste ou autre: vider la sidebar
+        if (titleEl) titleEl.textContent = 'Commandes';
+        const container = document.getElementById('unplacedOrdersContainer');
+        if (container) container.innerHTML = '<p class="no-orders">Sélectionnez une vue pour voir les commandes</p>';
+    }
+}
+
+/**
+ * Sidebar Vue Semaine - Affiche les commandes non affectées (complètes)
+ * Drag & Drop vers la grille semaine = affecter à cette semaine
+ * @param {string} searchQuery - Requête de recherche optionnelle
+ */
+function renderSidebarVueSemaine(searchQuery = '') {
+    const container = document.getElementById('unplacedOrdersContainer');
+    const unaffectedOrders = getCommandesNonAffectees();
+
+    // Trier par urgence (date de livraison)
+    unaffectedOrders.sort((a, b) => {
+        const dateA = a.dateLivraison ? new Date(a.dateLivraison) : new Date(8640000000000000);
         const dateB = b.dateLivraison ? new Date(b.dateLivraison) : new Date(8640000000000000);
-        
-        if (isNaN(dateA.getTime())) return 1; // A is invalid -> push to bottom
-        if (isNaN(dateB.getTime())) return -1; // B is invalid -> push A to top
-        
+        if (isNaN(dateA.getTime())) return 1;
+        if (isNaN(dateB.getTime())) return -1;
         return dateA - dateB;
     });
 
-    // Apply search filter if query exists
-    let filteredOrders = unplacedOrders;
+    // Filtrage recherche
+    let filteredOrders = unaffectedOrders;
     if (searchQuery && searchQuery.trim() !== '') {
-        filteredOrders = filterCommandesBySearch(unplacedOrders, searchQuery);
-        updateSearchResultCount(filteredOrders.length, unplacedOrders.length);
+        filteredOrders = filterCommandesBySearch(unaffectedOrders, searchQuery);
+        updateSearchResultCount(filteredOrders.length, unaffectedOrders.length);
     }
 
-    if (unplacedOrders.length === 0) {
-        container.innerHTML = '<p class="no-orders">Aucune commande à placer</p>';
+    if (unaffectedOrders.length === 0) {
+        container.innerHTML = '<p class="no-orders">Toutes les commandes sont affectées à une semaine</p>';
         return;
     }
 
-    // Check if search returned no results
     if (searchQuery && searchQuery.trim() !== '' && filteredOrders.length === 0) {
         container.innerHTML = `
             <div class="no-search-results">
@@ -2943,75 +3232,193 @@ function renderCommandesNonPlacees(searchQuery = '') {
                     <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
                 <p>Aucun résultat pour <span class="search-term">"${escapeHtml(searchQuery)}"</span></p>
-                <p style="margin-top: 8px; font-size: 12px;">Essayez un autre terme de recherche</p>
             </div>
         `;
         return;
     }
 
     let html = '';
-    let cardsRendered = 0;
+
+    // Zone de drop pour désaffecter des commandes (glisser depuis "À placer")
+    html += `
+        <div class="sidebar-dropzone-desaffect" id="dropzoneDesaffect">
+            <div class="dropzone-content">
+                <span class="dropzone-icon">📤</span>
+                <span class="dropzone-text">Glisser ici pour désaffecter</span>
+            </div>
+        </div>
+    `;
 
     filteredOrders.forEach(cmd => {
         const urgencyLevel = getUrgencyLevel(cmd.dateLivraison);
         const livraison = new Date(cmd.dateLivraison);
         const daysUntil = Math.ceil((livraison - currentTime) / (1000 * 60 * 60 * 24));
 
-        // Build operations HTML for UNPLACED operations only
-        let operationsHtml = '';
-        let hasUnplacedOps = false;
+        // Calculer le total des heures non placées
+        const totalHeures = cmd.operations
+            .filter(op => !op.slots || op.slots.length === 0)
+            .reduce((sum, op) => sum + op.dureeTotal, 0);
 
-        cmd.operations.forEach(op => {
-            // Only show operations that are NOT placed
-            if (!op.slots || op.slots.length === 0) {
-                hasUnplacedOps = true;
-                const typeClass = op.type.toLowerCase().replace('ç', 'c').replace('é', 'e');
-                const hasOverride = hasTimeOverride(op);
-                const originalDuration = op.dureeOriginal || op.dureeTotal;
-                operationsHtml += `
-                    <div class="operation-item-sidebar ${typeClass} draggable-from-sidebar ${hasOverride ? 'has-override' : ''}"
-                         draggable="true"
-                         data-commande-id="${cmd.id}"
-                         data-operation-type="${op.type}"
-                         data-operation-duration="${op.dureeTotal}"
-                         data-sidebar-operation='${JSON.stringify({ commandeId: cmd.id, operationType: op.type, duration: op.dureeTotal, fromSidebar: true }).replace(/'/g, "&#39;")}'>
-                        <div class="op-icon">⋮⋮</div>
-                        <div class="op-info">
-                            <div class="op-type">
-                                ${op.type}
-                                <span style="font-weight:normal; font-size:0.85em; color:#6c757d; margin-left:4px;">
-                                    (${cmd.client})
-                                </span>
-                            </div>
-                            <div class="op-duration ${hasOverride ? 'overridden' : ''}"
-                                 onclick="event.stopPropagation(); showTimeEditPopup('${cmd.id}', '${op.type}', ${op.dureeTotal}, ${originalDuration}, this)"
-                                 title="${hasOverride ? 'Temps modifié (Original: ' + formatHours(originalDuration) + ') - Cliquer pour modifier' : 'Cliquer pour modifier le temps'}">
-                                ${formatHours(op.dureeTotal)}${hasOverride ? '<span class="override-indicator">*</span>' : ''}
-                            </div>
+        // Badges des opérations (preview)
+        const opsHtml = cmd.operations.map(op => {
+            const placed = op.slots && op.slots.length > 0;
+            const typeClass = op.type.toLowerCase().replace('ç', 'c');
+            return `<span class="op-badge ${typeClass}" style="opacity: ${placed ? '0.5' : '1'}">
+                        ${op.type.substring(0, 3)} ${formatHours(op.dureeTotal)}${placed ? ' ✓' : ''}
+                    </span>`;
+        }).join('');
+
+        html += `
+            <div class="commande-card-semaine ${urgencyLevel} draggable-commande"
+                 draggable="true"
+                 data-commande-id="${cmd.id}"
+                 data-commande-affectation='${JSON.stringify({ commandeId: cmd.id, fromSidebar: true }).replace(/'/g, "&#39;")}'>
+                <div class="commande-header-semaine">
+                    <span class="drag-handle">⋮⋮</span>
+                    <span class="commande-id">${cmd.id}</span>
+                    <span class="commande-client">${cmd.client}</span>
+                </div>
+                <div class="commande-info-semaine">
+                    <div class="info-row">
+                        <span>Ref: ${cmd.refCdeClient || '-'}</span>
+                        <span>J-${daysUntil > 0 ? daysUntil : 0}</span>
+                    </div>
+                    <div class="info-row">
+                        <span>Livraison: ${formatDate(cmd.dateLivraison)}</span>
+                        <span>Total: ${formatHours(totalHeures)}</span>
+                    </div>
+                    <div class="operations-preview">
+                        ${opsHtml}
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+
+    // Initialiser drag & drop pour commandes
+    document.querySelectorAll('.draggable-commande').forEach(card => {
+        card.addEventListener('dragstart', handleCommandeDragStart);
+        card.addEventListener('dragend', handleDragEnd);
+    });
+}
+
+/**
+ * Sidebar Vue Journée - Affiche les opérations affectées à la semaine courante
+ * (anciennement renderCommandesNonPlacees adapté pour le workflow 2 étapes)
+ * @param {string} searchQuery - Requête de recherche optionnelle
+ */
+function renderSidebarVueJournee(searchQuery = '') {
+    const container = document.getElementById('unplacedOrdersContainer');
+    const operationsData = getOperationsAffecteesSemaine(semaineSelectionnee, anneeSelectionnee);
+
+    // Trier par urgence
+    operationsData.sort((a, b) => {
+        const dateA = a.commande.dateLivraison ? new Date(a.commande.dateLivraison) : new Date(8640000000000000);
+        const dateB = b.commande.dateLivraison ? new Date(b.commande.dateLivraison) : new Date(8640000000000000);
+        return dateA - dateB;
+    });
+
+    // Filtrage recherche
+    let filteredData = operationsData;
+    if (searchQuery && searchQuery.trim() !== '') {
+        const query = searchQuery.toLowerCase().trim();
+        filteredData = operationsData.filter(item =>
+            item.commande.id.toLowerCase().includes(query) ||
+            item.commande.client.toLowerCase().includes(query)
+        );
+        updateSearchResultCount(filteredData.length, operationsData.length);
+    }
+
+    if (operationsData.length === 0) {
+        container.innerHTML = `
+            <p class="no-orders">
+                Aucune opération affectée à S${semaineSelectionnee}
+                <br><small style="color: var(--color-text-secondary);">Affectez des commandes depuis la vue 3 Semaines</small>
+            </p>
+        `;
+        return;
+    }
+
+    if (searchQuery && searchQuery.trim() !== '' && filteredData.length === 0) {
+        container.innerHTML = `
+            <div class="no-search-results">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
+                    <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <p>Aucun résultat pour <span class="search-term">"${escapeHtml(searchQuery)}"</span></p>
+            </div>
+        `;
+        return;
+    }
+
+    // Regrouper par commande pour l'affichage
+    const groupedByCommande = {};
+    filteredData.forEach(item => {
+        if (!groupedByCommande[item.commande.id]) {
+            groupedByCommande[item.commande.id] = {
+                commande: item.commande,
+                operations: []
+            };
+        }
+        groupedByCommande[item.commande.id].operations.push(item.operation);
+    });
+
+    let html = '';
+
+    Object.values(groupedByCommande).forEach(group => {
+        const cmd = group.commande;
+        const urgencyLevel = getUrgencyLevel(cmd.dateLivraison);
+        const daysUntil = Math.ceil((new Date(cmd.dateLivraison) - currentTime) / (1000 * 60 * 60 * 24));
+
+        // Générer le HTML des opérations (draggable)
+        let operationsHtml = '';
+        group.operations.forEach(op => {
+            const typeClass = op.type.toLowerCase().replace('ç', 'c').replace('é', 'e');
+            const hasOverride = hasTimeOverride(op);
+            const originalDuration = op.dureeOriginal || op.dureeTotal;
+
+            operationsHtml += `
+                <div class="operation-item-sidebar ${typeClass} draggable-from-sidebar ${hasOverride ? 'has-override' : ''}"
+                     draggable="true"
+                     data-commande-id="${cmd.id}"
+                     data-operation-type="${op.type}"
+                     data-operation-duration="${op.dureeTotal}"
+                     data-sidebar-operation='${JSON.stringify({ commandeId: cmd.id, operationType: op.type, duration: op.dureeTotal, fromSidebar: true }).replace(/'/g, "&#39;")}'>
+                    <div class="op-icon">⋮⋮</div>
+                    <div class="op-info">
+                        <div class="op-type">
+                            ${op.type}
+                            <span style="font-weight:normal; font-size:0.85em; color:#6c757d; margin-left:4px;">
+                                (${cmd.client})
+                            </span>
+                        </div>
+                        <div class="op-duration ${hasOverride ? 'overridden' : ''}"
+                             onclick="event.stopPropagation(); showTimeEditPopup('${cmd.id}', '${op.type}', ${op.dureeTotal}, ${originalDuration}, this)"
+                             title="${hasOverride ? 'Temps modifié (Original: ' + formatHours(originalDuration) + ')' : 'Cliquer pour modifier le temps'}">
+                            ${formatHours(op.dureeTotal)}${hasOverride ? '<span class="override-indicator">*</span>' : ''}
                         </div>
                     </div>
-                `;
-            }
+                </div>
+            `;
         });
-
-        // Skip card if no unplaced operations (Issue #4 fix)
-        if (!hasUnplacedOps || operationsHtml === '') {
-            return;
-        }
 
         html += `
             <div class="commande-non-placee ${urgencyLevel}">
                 <div class="commande-header">
                     <span class="commande-id">${cmd.id}</span>
                     <span class="commande-client">${cmd.client}</span>
+                    <button class="btn-desaffecter" onclick="desaffecterCommande('${cmd.id}')" title="Retirer de la semaine ${semaineSelectionnee}">✕</button>
                 </div>
                 <div class="commande-details">
                     <div class="detail-item">
                         <strong>Ref:</strong> ${cmd.refCdeClient || '-'}
                     </div>
                     <div class="detail-item">
-                        <strong>Livraison:</strong> ${formatDate(cmd.dateLivraison)} (${daysUntil} jours)
-                        ${urgencyLevel === 'urgente' ? ' ❌ URGENT' : urgencyLevel === 'attention' ? ' ⚠️' : ' ✓'}
+                        <strong>Livraison:</strong> ${formatDate(cmd.dateLivraison)} (J-${daysUntil > 0 ? daysUntil : 0})
+                        ${urgencyLevel === 'urgente' ? ' ❌' : urgencyLevel === 'attention' ? ' ⚠️' : ' ✓'}
                     </div>
                     <div class="detail-item">
                         <strong>Opérations à placer:</strong>
@@ -3030,21 +3437,28 @@ function renderCommandesNonPlacees(searchQuery = '') {
                 </div>
             </div>
         `;
-        cardsRendered++;
     });
 
-    // Show message if no cards to display
-    if (cardsRendered === 0) {
+    if (html === '') {
         container.innerHTML = '<p class="no-orders">Aucune opération à placer</p>';
     } else {
         container.innerHTML = html;
 
-        // Initialize drag for sidebar operations
+        // Initialiser drag pour opérations
         document.querySelectorAll('.draggable-from-sidebar').forEach(op => {
             op.addEventListener('dragstart', handleSidebarDragStart);
             op.addEventListener('dragend', handleDragEnd);
         });
     }
+}
+
+/**
+ * Alias de compatibilité - redirige vers renderSidebarContent
+ * Conservé pour ne pas casser les appels existants
+ * @param {string} searchQuery - Optional search query to filter commands
+ */
+function renderCommandesNonPlacees(searchQuery = '') {
+    renderSidebarContent(searchQuery);
 }
 
 /**
@@ -3320,6 +3734,26 @@ function initDragAndDrop() {
         sidebarZone.addEventListener('drop', handleSidebarDrop);
         sidebarZone.addEventListener('dragleave', handleDragLeave);
     }
+
+    // === Workflow 2 étapes: Badges "À placer" draggables pour désaffectation ===
+    document.querySelectorAll('.command-badge-aplacer[draggable="true"]').forEach(badge => {
+        badge.addEventListener('dragstart', handleDesaffectationDragStart);
+        badge.addEventListener('dragend', handleDesaffectationDragEnd);
+    });
+
+    // Zone de drop pour désaffectation (dans sidebar vue semaine)
+    const desaffectZone = document.getElementById('dropzoneDesaffect');
+    if (desaffectZone) {
+        desaffectZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            e.currentTarget.classList.add('drag-over');
+        });
+        desaffectZone.addEventListener('dragleave', (e) => {
+            e.currentTarget.classList.remove('drag-over');
+        });
+        desaffectZone.addEventListener('drop', handleDesaffectationDrop);
+    }
 }
 
 /**
@@ -3410,6 +3844,174 @@ function handleDragOver(e) {
 
 function handleDragLeave(e) {
     e.currentTarget.classList.remove('drag-over');
+}
+
+// ===================================
+// Drag & Drop Workflow 2 étapes - Affectation Semaine
+// ===================================
+
+/**
+ * Handler pour le drag start d'une commande complète (vue semaine)
+ * Marque l'opération comme étant une affectation de commande
+ */
+function handleCommandeDragStart(e) {
+    draggedOperation = JSON.parse(e.target.getAttribute('data-commande-affectation'));
+    draggedOperation.isCommandeAffectation = true; // Flag distinctif
+    e.target.classList.add('dragging');
+    document.body.classList.add('dragging-active');
+    e.dataTransfer.effectAllowed = 'move';
+}
+
+/**
+ * Handler pour le drop sur une cellule semaine (affectation)
+ * Affecte la commande à la semaine cible
+ */
+function handleWeekCellDrop(e) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+    document.body.classList.remove('dragging-active');
+
+    // Vérifier que c'est bien une affectation de commande
+    if (!draggedOperation || !draggedOperation.isCommandeAffectation) {
+        // Ce n'est pas une affectation de commande, ignorer
+        draggedOperation = null;
+        return;
+    }
+
+    const targetWeek = parseInt(e.currentTarget.getAttribute('data-week'));
+    const targetYear = parseInt(e.currentTarget.getAttribute('data-year'));
+
+    const cmd = commandes.find(c => c.id === draggedOperation.commandeId);
+    if (!cmd) {
+        Toast.error('Commande non trouvée');
+        draggedOperation = null;
+        return;
+    }
+
+    // Formater la semaine affectée au format ISO
+    const weekStr = `${targetYear}-W${String(targetWeek).padStart(2, '0')}`;
+
+    // Affecter la commande à cette semaine
+    cmd.semaineAffectee = weekStr;
+
+    // Sauvegarder l'état pour undo
+    if (typeof historyManager !== 'undefined') {
+        historyManager.saveState(`Affectation ${cmd.id} à S${targetWeek}`);
+    }
+
+    // Sauvegarder
+    if (typeof syncManager !== 'undefined') {
+        syncManager.saveLocalData();
+    }
+
+    // Toast de confirmation
+    Toast.success(`Commande ${cmd.id} affectée à la semaine ${targetWeek}`);
+
+    // Rafraîchir l'affichage
+    refresh();
+
+    // Reset
+    draggedOperation = null;
+}
+
+/**
+ * Désaffecter une commande de sa semaine
+ * Retire aussi tous les slots existants si présents
+ * @param {string} commandeId - ID de la commande à désaffecter
+ */
+function desaffecterCommande(commandeId) {
+    const cmd = commandes.find(c => c.id === commandeId);
+    if (!cmd) {
+        Toast.error('Commande non trouvée');
+        return;
+    }
+
+    // Vérifier s'il y a des slots à retirer
+    const hasSlots = cmd.operations.some(op => op.slots && op.slots.length > 0);
+
+    let confirmMsg = `Retirer la commande ${commandeId} de la semaine ?`;
+    if (hasSlots) {
+        confirmMsg += `\n\nATTENTION: Les opérations déjà placées seront également retirées du planning.`;
+    }
+
+    if (!confirm(confirmMsg)) return;
+
+    // Retirer tous les slots des opérations
+    cmd.operations.forEach(op => {
+        if (op.slots && op.slots.length > 0) {
+            op.slots = [];
+            op.statut = 'Non placée';
+            op.progressionReelle = 0;
+        }
+    });
+
+    // Retirer l'affectation
+    cmd.semaineAffectee = null;
+
+    // Mettre à jour le statut global de la commande
+    cmd.statut = 'Non placée';
+
+    // Sauvegarder l'état pour undo
+    if (typeof historyManager !== 'undefined') {
+        historyManager.saveState(`Désaffectation ${commandeId}`);
+    }
+
+    // Sauvegarder
+    if (typeof syncManager !== 'undefined') {
+        syncManager.saveLocalData();
+    }
+
+    Toast.info(`Commande ${commandeId} retirée de la planification`);
+    refresh();
+}
+
+// Exposer globalement pour les onclick dans le HTML
+window.desaffecterCommande = desaffecterCommande;
+
+/**
+ * Handler pour le drag start d'un badge "À placer" (désaffectation)
+ */
+function handleDesaffectationDragStart(e) {
+    const data = JSON.parse(e.target.getAttribute('data-commande-desaffectation'));
+    draggedOperation = data;
+    e.target.classList.add('dragging');
+    document.body.classList.add('dragging-active');
+    document.body.classList.add('dragging-desaffectation'); // Flag pour montrer la dropzone
+    e.dataTransfer.effectAllowed = 'move';
+}
+
+/**
+ * Handler pour le drag end d'un badge "À placer"
+ */
+function handleDesaffectationDragEnd(e) {
+    e.target.classList.remove('dragging');
+    document.body.classList.remove('dragging-active');
+    document.body.classList.remove('dragging-desaffectation');
+    document.querySelectorAll('.sidebar-dropzone-desaffect').forEach(zone => {
+        zone.classList.remove('drag-over');
+    });
+}
+
+/**
+ * Handler pour le drop sur la zone de désaffectation (sidebar)
+ */
+function handleDesaffectationDrop(e) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+    document.body.classList.remove('dragging-active');
+    document.body.classList.remove('dragging-desaffectation');
+
+    // Vérifier que c'est bien une désaffectation
+    if (!draggedOperation || !draggedOperation.isDesaffectation) {
+        draggedOperation = null;
+        return;
+    }
+
+    const commandeId = draggedOperation.commandeId;
+    draggedOperation = null;
+
+    // Appeler la fonction de désaffectation (avec confirmation)
+    desaffecterCommande(commandeId);
 }
 
 /**
@@ -4346,16 +4948,43 @@ class DataSyncManager {
         await this.syncWithGoogleSheets(true);
     }
 
-    // Méthode 5: Merge intelligent
+    // Méthode 5: Merge intelligent avec nettoyage des commandes obsolètes
     mergeData(localData, remoteData) {
         // Stratégie:
         // - Remote est maître pour la liste des commandes et leurs détails (poids, délais)
         // - Local est maître pour le PLANNING (slots) car le Sheet V1 ne les a pas
-        
+        // - Nettoyage : supprimer les commandes locales absentes du serveur (livrées/terminées)
+
         const localMap = new Map(localData.map(c => [c.id, c]));
+        const remoteIds = new Set(remoteData.map(c => c.id));
         let updatedCount = 0;
         let newCount = 0;
-        
+        let cleanedCount = 0;
+
+        // === NETTOYAGE DES COMMANDES OBSOLÈTES ===
+        // Supprimer les commandes locales qui ne sont plus sur le serveur
+        // SAUF si elles sont "Planifiée" avec des modifications locales non-sync
+        localData.forEach(localCmd => {
+            if (!remoteIds.has(localCmd.id)) {
+                // Cette commande n'existe plus côté serveur (probablement Livrée/Terminée)
+                const hasLocalModifications = localCmd.statut === 'Planifiée' &&
+                    localCmd.operations?.some(op => op.slots && op.slots.length > 0);
+
+                if (hasLocalModifications) {
+                    // Garder cette commande - elle a des planifications locales non-sync
+                    console.log(`⚠️ Commande ${localCmd.id} absente du serveur mais conservée (planning local actif)`);
+                } else {
+                    // Supprimer cette commande - elle n'est plus active
+                    cleanedCount++;
+                    console.log(`🗑️ Commande ${localCmd.id} supprimée (plus sur le serveur)`);
+                }
+            }
+        });
+
+        if (cleanedCount > 0) {
+            console.log(`🧹 Nettoyage: ${cleanedCount} commande(s) obsolète(s) supprimée(s)`);
+        }
+
         // On reconstruit la liste commandes en se basant sur le Remote
         const merged = remoteData.map(remoteCmd => {
             const localCmd = localMap.get(remoteCmd.id);
@@ -4405,6 +5034,14 @@ class DataSyncManager {
                 if (localCmd.statut === 'Planifiée' && remoteCmd.statut !== 'Livrée' && remoteCmd.statut !== 'Terminée') {
                     remoteCmd.statut = 'Planifiée';
                 }
+
+                // === PRÉSERVER semaineAffectee (workflow 2 étapes) ===
+                // Le champ semaineAffectee est local uniquement, on le préserve toujours
+                if (localCmd.semaineAffectee !== undefined && localCmd.semaineAffectee !== null) {
+                    remoteCmd.semaineAffectee = localCmd.semaineAffectee;
+                } else {
+                    remoteCmd.semaineAffectee = null;
+                }
             } else {
                 // Nouvelle commande - initialiser les champs override pour toutes les opérations
                 newCount++;
@@ -4413,15 +5050,19 @@ class DataSyncManager {
                     op.dureeOverride = null;
                     op.overrideTimestamp = null;
                 });
+                // Nouvelle commande = pas encore affectée à une semaine
+                remoteCmd.semaineAffectee = null;
             }
             return remoteCmd;
         });
         
         commandes = merged;
-        console.log(`✅ Merge: ${newCount} nouvelles, ${updatedCount} mises à jour.`);
-        
-        if (newCount > 0 || updatedCount > 0) {
-            Toast.success(`Sync: ${newCount} nouvelles, ${updatedCount} mises à jour.`);
+        console.log(`✅ Merge: ${newCount} nouvelles, ${updatedCount} mises à jour, ${cleanedCount} nettoyées.`);
+
+        if (newCount > 0 || updatedCount > 0 || cleanedCount > 0) {
+            let msg = `Sync: ${newCount} nouvelles, ${updatedCount} mises à jour`;
+            if (cleanedCount > 0) msg += `, ${cleanedCount} nettoyées`;
+            Toast.success(msg);
         } else {
             Toast.info('Sync: Aucune modification de données détectée.');
         }
@@ -4441,6 +5082,94 @@ class DataSyncManager {
             console.error('❌ Quota exceeded or save error:', e);
             Toast.error('Erreur sauvegarde locale (Quota ?)');
         }
+    }
+
+    // Méthode 6b: Statistiques de stockage localStorage
+    // Retourne les stats détaillées sur l'utilisation du localStorage
+    getStorageStats() {
+        const MAX_STORAGE = 5 * 1024 * 1024; // 5 MB limite localStorage
+
+        // Calculer la taille des commandes
+        const commandesStr = localStorage.getItem(this.STORAGE_KEY) || '[]';
+        const commandesSize = new Blob([commandesStr]).size;
+        const commandesCount = commandes.length;
+
+        // Calculer la taille des événements système
+        const eventsStr = localStorage.getItem('etm_system_events') || '[]';
+        const eventsSize = new Blob([eventsStr]).size;
+        const eventsCount = systemEvents?.length || 0;
+
+        // Calculer la taille totale utilisée par l'app
+        const backupStr = localStorage.getItem(this.BACKUP_KEY) || '';
+        const backupSize = new Blob([backupStr]).size;
+        const metadataStr = localStorage.getItem('etm_sync_metadata') || '';
+        const metadataSize = new Blob([metadataStr]).size;
+
+        const totalUsed = commandesSize + eventsSize + backupSize + metadataSize;
+        const percentUsed = (totalUsed / MAX_STORAGE * 100);
+        const remainingMB = ((MAX_STORAGE - totalUsed) / (1024 * 1024));
+
+        return {
+            commandes: {
+                count: commandesCount,
+                sizeKB: (commandesSize / 1024).toFixed(2)
+            },
+            events: {
+                count: eventsCount,
+                sizeKB: (eventsSize / 1024).toFixed(2)
+            },
+            backup: {
+                sizeKB: (backupSize / 1024).toFixed(2)
+            },
+            totalUsedKB: (totalUsed / 1024).toFixed(2),
+            percentUsed: percentUsed.toFixed(1),
+            remainingMB: remainingMB.toFixed(2),
+            maxMB: 5
+        };
+    }
+
+    // Méthode 6c: Nettoyage manuel des commandes livrées/terminées
+    // Supprime les commandes avec statut "Livrée" ou "Terminée" plus vieilles que daysToKeep jours
+    cleanupDeliveredOrders(daysToKeep = 30) {
+        const now = new Date();
+        const limitDate = new Date(now);
+        limitDate.setDate(limitDate.getDate() - daysToKeep);
+
+        const initialCount = commandes.length;
+        let removedCount = 0;
+
+        commandes = commandes.filter(cmd => {
+            // Garder si statut n'est pas "Livrée" ou "Terminée"
+            if (cmd.statut !== 'Livrée' && cmd.statut !== 'Terminée') {
+                return true;
+            }
+
+            // Vérifier la date de livraison
+            const dateLivraison = new Date(cmd.dateLivraison);
+            if (isNaN(dateLivraison.getTime())) {
+                // Pas de date valide, garder par sécurité
+                return true;
+            }
+
+            // Supprimer si plus vieille que la limite
+            if (dateLivraison < limitDate) {
+                removedCount++;
+                console.log(`🗑️ Commande ${cmd.id} supprimée (${cmd.statut} depuis ${cmd.dateLivraison})`);
+                return false;
+            }
+
+            return true;
+        });
+
+        if (removedCount > 0) {
+            this.saveLocalData();
+            Toast.success(`${removedCount} commande(s) archivée(s) supprimée(s)`);
+            console.log(`🧹 Nettoyage manuel: ${removedCount}/${initialCount} commandes supprimées`);
+        } else {
+            Toast.info('Aucune commande archivée à nettoyer');
+        }
+
+        return removedCount;
     }
 
     // Méthode 7: Auto-sync périodique
@@ -4539,16 +5268,53 @@ function initSyncHandlers() {
         }
     });
     
-    // Toggle dropdown menu
+    // Bouton nettoyage commandes archivées
+    document.getElementById('btnCleanupOrders')?.addEventListener('click', () => {
+        if (confirm('Supprimer les commandes Livrées/Terminées de plus de 30 jours ?')) {
+            syncManager.cleanupDeliveredOrders(30);
+            updateStorageIndicator(); // Mettre à jour l'indicateur après nettoyage
+        }
+    });
+
+    // Toggle dropdown menu + mise à jour indicateur stockage
     document.getElementById('btnDataMenu')?.addEventListener('click', (e) => {
         e.stopPropagation();
         document.querySelector('.dropdown')?.classList.toggle('active');
+        updateStorageIndicator(); // Mettre à jour à chaque ouverture
     });
     
     // Fermer dropdown si clic ailleurs
     document.addEventListener('click', () => {
         document.querySelector('.dropdown.active')?.classList.remove('active');
     });
+}
+
+/**
+ * Met à jour l'indicateur visuel de stockage dans le dropdown Data
+ * Affiche l'espace utilisé avec un code couleur si > 80%
+ */
+function updateStorageIndicator() {
+    const indicator = document.getElementById('storageIndicator');
+    const textEl = document.getElementById('storageText');
+    if (!indicator || !textEl || typeof syncManager === 'undefined') return;
+
+    const stats = syncManager.getStorageStats();
+    const percent = parseFloat(stats.percentUsed);
+
+    // Formater le texte
+    textEl.textContent = `${stats.totalUsedKB} KB / ${stats.maxMB} MB (${stats.percentUsed}%)`;
+
+    // Changer la couleur si usage > 80%
+    if (percent > 80) {
+        indicator.style.color = '#e67e22'; // Orange warning
+        indicator.style.fontWeight = '600';
+    } else {
+        indicator.style.color = 'var(--color-text-muted)';
+        indicator.style.fontWeight = 'normal';
+    }
+
+    // Log détaillé en console pour debug
+    console.log('📊 Storage Stats:', stats);
 }
 
 // ===================================
@@ -5433,6 +6199,9 @@ function toggleVue(vue) {
     } else if (vue === 'liste') {
         renderVueListe();
     }
+
+    // Mettre à jour la sidebar selon la vue (workflow 2 étapes)
+    renderSidebarContent(currentSearchQuery || '');
 }
 
 /**
@@ -8160,7 +8929,12 @@ async function init() {
         }
     } catch (e) {
         console.error("Critical: Sync Manager Init failed", e);
-        if (typeof syncManager !== 'undefined') syncManager.loadLocalData(); 
+        if (typeof syncManager !== 'undefined') syncManager.loadLocalData();
+    }
+
+    // Migration workflow 2 étapes: ajouter semaineAffectee aux commandes
+    if (migrateCommandesSemaineAffectee()) {
+        syncManager.saveLocalData();
     }
 
     console.log(`✅ Commandes actives: ${getActiveOrders().length}/${commandes.length}`);

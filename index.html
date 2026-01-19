@@ -20,9 +20,9 @@
             </div>
             <div class="header-right">
             <div class="view-toggle">
-                <button id="btnVueListe" class="btn btn-toggle">Vue Liste</button>
-                <button id="btnVueSemaine" class="btn btn-toggle active">Vue Semaine</button>
-                <button id="btnVueJournee" class="btn btn-toggle">Vue Journée</button>
+                <button id="btnVueListe" class="btn btn-toggle">Liste</button>
+                <button id="btnVueSemaine" class="btn btn-toggle active">3 Semaines</button>
+                <button id="btnVueJournee" class="btn btn-toggle">Semaine</button>
             </div>
 
             <!-- Contrôles de Synchronisation -->
@@ -64,6 +64,17 @@
                                                         </svg>
                                                         Imprimer Planning
                                                     </button>
+                                                    <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
+                                                    <button id="btnCleanupOrders" title="Supprimer les commandes livrées/terminées de plus de 30 jours">
+                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                            <path d="M5 2v1H3v1h10V3h-2V2H5zm1 1h4V2H6v1zM4 5v9a1 1 0 001 1h6a1 1 0 001-1V5H4zm2 7V7h1v5H6zm3 0V7h1v5H9z" fill="currentColor"/>
+                                                        </svg>
+                                                        Nettoyer commandes archivées
+                                                    </button>
+                                                    <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
+                                                    <div id="storageIndicator" style="padding: 6px 10px; font-size: 12px; color: var(--color-text-muted); display: flex; align-items: center; gap: 6px;">
+                                                        <span id="storageText">-- KB / 5 MB</span>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
@@ -310,8 +321,8 @@
                 <div class="form-group">
                     <label>Format</label>
                     <div style="display:flex; gap:10px;">
-                        <label style="font-weight:normal;"><input type="radio" name="printFormat" value="semaine" checked> Vue Semaine</label>
-                        <label style="font-weight:normal;"><input type="radio" name="printFormat" value="journee"> Vue Détaillée</label>
+                        <label style="font-weight:normal;"><input type="radio" name="printFormat" value="semaine" checked> 3 Semaines</label>
+                        <label style="font-weight:normal;"><input type="radio" name="printFormat" value="journee"> Semaine</label>
                     </div>
                 </div>
                 <div class="modal-actions">

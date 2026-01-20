@@ -9039,9 +9039,9 @@ function renderMachinesManager() {
     if (!container) return;
 
     const categories = [
-        { key: 'cisaillage', label: 'Cisaillage', color: '#4ade80' },
-        { key: 'poinconnage', label: 'Poinçonnage', color: '#f97316' },
-        { key: 'pliage', label: 'Pliage', color: '#a855f7' }
+        { key: 'cisaillage', label: 'Cisaillage', color: '#10b981' },
+        { key: 'poinconnage', label: 'Poinçonnage', color: '#2563eb' },
+        { key: 'pliage', label: 'Pliage', color: '#ef4444' }
     ];
 
     let html = '';
@@ -9128,11 +9128,11 @@ function openMachineEdit(machineId, category) {
 
         // Couleur par défaut selon catégorie
         const defaultColors = {
-            cisaillage: '#4ade80',
-            poinconnage: '#f97316',
-            pliage: '#a855f7'
+            cisaillage: '#10b981',
+            poinconnage: '#2563eb',
+            pliage: '#ef4444'
         };
-        document.getElementById('machineEditColor').value = defaultColors[category] || '#4ade80';
+        document.getElementById('machineEditColor').value = defaultColors[category] || '#10b981';
     }
 
     modal.classList.add('active');

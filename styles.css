@@ -4,9 +4,9 @@
 
 :root {
     /* Colors - Operations */
-    --color-cisaillage: #28a745;
-    --color-poinconnage: #fd7e14;
-    --color-pliage: #6f42c1;
+    --color-cisaillage: #10b981;
+    --color-poinconnage: #2563eb;
+    --color-pliage: #ef4444;
 
     /* Colors - Capacity */
     --color-capacity-ok: #28a745;
@@ -522,30 +522,30 @@ body {
 }
 
 .sidebar-operation.cisaillage {
-    background-color: rgba(40, 167, 69, 0.1);
+    background-color: rgba(16, 185, 129, 0.1);
     border-color: var(--color-cisaillage);
 }
 
 .sidebar-operation.cisaillage:hover {
-    background-color: rgba(40, 167, 69, 0.15);
+    background-color: rgba(16, 185, 129, 0.15);
 }
 
 .sidebar-operation.poinconnage {
-    background-color: rgba(253, 126, 20, 0.1);
+    background-color: rgba(37, 99, 235, 0.1);
     border-color: var(--color-poinconnage);
 }
 
 .sidebar-operation.poinconnage:hover {
-    background-color: rgba(253, 126, 20, 0.15);
+    background-color: rgba(37, 99, 235, 0.15);
 }
 
 .sidebar-operation.pliage {
-    background-color: rgba(111, 66, 193, 0.1);
+    background-color: rgba(239, 68, 68, 0.1);
     border-color: var(--color-pliage);
 }
 
 .sidebar-operation.pliage:hover {
-    background-color: rgba(111, 66, 193, 0.15);
+    background-color: rgba(239, 68, 68, 0.15);
 }
 
 .sidebar-op-icon {
@@ -977,32 +977,32 @@ body {
    Machine Type Background Colors
    =================================== */
 
-/* Fond vert très clair pour les cisailles */
+/* Fond vert émeraude très clair pour les cisailles */
 .day-cell.machine-type-cisaillage {
-    background-color: rgba(22, 195, 85, 0.18) !important;
+    background-color: rgba(16, 185, 129, 0.18) !important;
 }
 
-/* Fond orange très clair pour les poinçonneuses */
+/* Fond bleu très clair pour les poinçonneuses */
 .day-cell.machine-type-poinconnage {
-    background-color: rgba(253, 126, 20, 0.18) !important;
+    background-color: rgba(37, 99, 235, 0.18) !important;
 }
 
-/* Fond violet très clair pour les plieuses */
+/* Fond rouge très clair pour les plieuses */
 .day-cell.machine-type-pliage {
-    background-color: rgba(111, 66, 193, 0.18) !important;
+    background-color: rgba(239, 68, 68, 0.18) !important;
 }
 
 /* Override friday style - opacité légèrement plus élevée */
 .day-cell.friday.machine-type-cisaillage {
-    background-color: rgba(22, 195, 85, 0.22) !important;
+    background-color: rgba(16, 185, 129, 0.22) !important;
 }
 
 .day-cell.friday.machine-type-poinconnage {
-    background-color: rgba(253, 126, 20, 0.22) !important;
+    background-color: rgba(37, 99, 235, 0.22) !important;
 }
 
 .day-cell.friday.machine-type-pliage {
-    background-color: rgba(111, 66, 193, 0.22) !important;
+    background-color: rgba(239, 68, 68, 0.22) !important;
 }
 
 /* Timeline with absolute positioning */
@@ -1863,17 +1863,17 @@ body {
 
 .operation-item-sidebar.cisaillage {
     border-color: var(--color-cisaillage);
-    background: #d4edda;
+    background: #d1fae5;
 }
 
 .operation-item-sidebar.poinconnage {
     border-color: var(--color-poinconnage);
-    background: #fff3cd;
+    background: #dbeafe;
 }
 
 .operation-item-sidebar.pliage {
     border-color: var(--color-pliage);
-    background: #e2d9f3;
+    background: #fee2e2;
 }
 
 .op-icon {
@@ -3179,17 +3179,17 @@ body.dragging-active .drop-zone {
 }
 
 .op-badge.cisaillage {
-    background: rgba(40, 167, 69, 0.15);
+    background: rgba(16, 185, 129, 0.15);
     color: var(--color-cisaillage);
 }
 
 .op-badge.poinconnage {
-    background: rgba(253, 126, 20, 0.15);
+    background: rgba(37, 99, 235, 0.15);
     color: var(--color-poinconnage);
 }
 
 .op-badge.pliage {
-    background: rgba(111, 66, 193, 0.15);
+    background: rgba(239, 68, 68, 0.15);
     color: var(--color-pliage);
 }
 

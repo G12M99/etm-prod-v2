@@ -1534,35 +1534,42 @@ function calculerCapaciteSemaineGlobale(semaine, annee) {
  * @returns {string|null} Start time (HH:MM) or null if no gap found
  */
 /**
- * Helper: Calculate End Time accounting for Lunch Break - dynamique basé sur SCHEDULE_CONFIG
+ * Helper: Calculate End Time accounting for ALL blocked zones (breaks + inter-shift gaps)
+ * Remplace l'ancienne calculateEndTimeWithLunch
  */
-function calculateEndTimeWithLunch(startDec, duration, day) {
-    const schedule = getScheduleForDay(day);
-    const lunchStart = schedule.lunchStart;
-    const lunchEnd = schedule.lunchEnd;
+function calculateEndTimeWithBreaks(startDec, duration, day) {
+    const blockedZones = getBlockedZonesForDay(day);
+    if (blockedZones.length === 0) return startDec + duration;
 
-    // Si pas de pause déjeuner (ex: Vendredi), pas d'impact
-    if (lunchStart === null || lunchEnd === null) {
-        return startDec + duration;
+    let currentPos = startDec;
+    let remaining = duration;
+
+    for (const zone of blockedZones) {
+        if (remaining <= 0.001) break;
+        if (currentPos >= zone.end) continue;
+
+        // Si on demarre dans une zone bloquee, sauter a la fin
+        if (currentPos >= zone.start && currentPos < zone.end) {
+            currentPos = zone.end;
+            continue;
+        }
+
+        // Temps disponible avant la zone
+        const availableBefore = zone.start - currentPos;
+        if (remaining <= availableBefore) {
+            return currentPos + remaining;
+        }
+
+        // On traverse la zone
+        remaining -= availableBefore;
+        currentPos = zone.end;
     }
 
-    // If we start after lunch, no impact
-    if (startDec >= lunchStart) {
-        // But if we start strictly inside lunch (should be prevented by search logic, but for safety)
-        if (startDec < lunchEnd) return lunchEnd + duration;
-        return startDec + duration;
-    }
-
-    // We start before lunch. Check if we hit it.
-    const tentativeEnd = startDec + duration;
-    if (tentativeEnd > lunchStart) {
-        // We span lunch. Add the break duration to the end.
-        const lunchDuration = lunchEnd - lunchStart;
-        return tentativeEnd + lunchDuration;
-    }
-
-    return tentativeEnd;
+    return currentPos + remaining;
 }
+
+// Alias pour retrocompatibilite
+const calculateEndTimeWithLunch = calculateEndTimeWithBreaks;
 
 /**
  * Détecte si une opération déborde sur les heures supplémentaires
@@ -1647,31 +1654,32 @@ function findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeSt
         currentSearch = Math.max(currentSearch, parseInt(parts[0]) + parseInt(parts[1]) / 60);
     }
 
-    const lunchStart = 12.5;
-    const lunchEnd = 13.0;
+    // Recuperer toutes les zones bloquees (pauses + gaps inter-equipes)
+    const blockedZones = getBlockedZonesForDay(jour);
 
     // 4. Iterate to find a slot
     // We treat machineSlots as obstacles. We jump over them.
-    
+
     // Optimization: Merge contiguous machine slots to simplify jumping
     // (Optional but good for performance)
 
     while (currentSearch + durationNeeded <= dayEnd + 0.001) { // 0.001 epsilon
-        
-        // A. Handle Lunch Constraint for Start Time
-        if (jour !== 'Vendredi') {
-            // Cannot start INSIDE lunch
-            if (currentSearch > lunchStart && currentSearch < lunchEnd) {
-                currentSearch = lunchEnd;
+
+        // A. Handle blocked zones (pauses, inter-shift gaps) for Start Time
+        for (const zone of blockedZones) {
+            // Cannot start INSIDE a blocked zone
+            if (currentSearch >= zone.start && currentSearch < zone.end) {
+                currentSearch = zone.end;
             }
-            // Check "Small Op" Rule: If < 30min and hits lunch, push to after lunch
-            if (durationNeeded < 0.5 && currentSearch < lunchStart && (currentSearch + durationNeeded > lunchStart)) {
-                currentSearch = lunchEnd;
+            // Check "Small Op" Rule: If < 30min and would touch a zone, push to after
+            if (durationNeeded < 0.5 && currentSearch < zone.start &&
+                currentSearch + durationNeeded > zone.start) {
+                currentSearch = zone.end;
             }
         }
 
-        // B. Calculate Required End Time (including lunch span if needed)
-        const requiredEnd = calculateEndTimeWithLunch(currentSearch, durationNeeded, jour);
+        // B. Calculate Required End Time (including all blocked zones)
+        const requiredEnd = calculateEndTimeWithBreaks(currentSearch, durationNeeded, jour);
 
         // C. Check Day Limit
         if (requiredEnd > dayEnd + 0.001) {
@@ -2999,21 +3007,21 @@ function renderVueJournee() {
                     `;
                 });
 
-            // 1. Add lunch break visual - dynamique basé sur SCHEDULE_CONFIG
-            if (daySchedule.lunchStart !== null && daySchedule.lunchEnd !== null) {
-                const lunchStartDecimal = daySchedule.lunchStart;
-                const lunchEndDecimal = daySchedule.lunchEnd;
-                const topLunch = (lunchStartDecimal - startHourTimeline) * 60;
-                const heightLunch = (lunchEndDecimal - lunchStartDecimal) * 60;
-                html += `<div class="lunch-break" style="top: ${topLunch}px; height: ${heightLunch}px;"></div>`;
-            }
+            // 1. Add ALL blocked zones visual (pauses dynamiques + gaps inter-equipes)
+            const blockedZonesForRender = getBlockedZonesForDay(day);
+            blockedZonesForRender.forEach(zone => {
+                const topZone = (zone.start - startHourTimeline) * 60;
+                const heightZone = (zone.end - zone.start) * 60;
 
-            // 1b. Add inter-shift gaps visual (zones between shifts)
-            interShiftGaps.forEach(gap => {
-                const topGap = (gap.start - startHourTimeline) * 60;
-                const heightGap = (gap.end - gap.start) * 60;
-                html += `<div class="inter-shift-gap" style="top: ${topGap}px; height: ${heightGap}px;"
-                         title="Hors horaires (${decimalToTimeString(gap.start)} - ${decimalToTimeString(gap.end)})"></div>`;
+                if (zone.type === 'break') {
+                    // Pause (dejeuner, cafe, etc.)
+                    html += `<div class="lunch-break" style="top: ${topZone}px; height: ${heightZone}px;"
+                             title="${zone.name} (${decimalToTimeString(zone.start)} - ${decimalToTimeString(zone.end)})"></div>`;
+                } else if (zone.type === 'inter-shift-gap') {
+                    // Gap inter-equipes
+                    html += `<div class="inter-shift-gap" style="top: ${topZone}px; height: ${heightZone}px;"
+                             title="${zone.name} (${decimalToTimeString(zone.start)} - ${decimalToTimeString(zone.end)})"></div>`;
+                }
             });
 
             // 2. Add Overtime Separator - dynamique basé sur SCHEDULE_CONFIG (multi-equipes)
@@ -3061,9 +3069,10 @@ function renderVueJournee() {
                 const endHourParts = slot.heureFin.split(':');
                 const endDecimal = parseInt(endHourParts[0]) + parseInt(endHourParts[1]) / 60;
 
-                const lunchStart = 12.5;
-                const lunchEnd = 13.0;
-                const crossesLunch = day !== 'Vendredi' && startDecimal < lunchStart && endDecimal > lunchEnd;
+                // Trouver les zones bloquees que ce slot traverse
+                const crossedZones = blockedZonesForRender.filter(zone =>
+                    startDecimal < zone.end && endDecimal > zone.start
+                );
 
                 const renderSlotDiv = (sTime, eTime, isSplitPart = false) => {
                     const startOffsetHours = sTime - startHourTimeline;
@@ -3071,8 +3080,8 @@ function renderVueJournee() {
                     const heightInPixels = Math.round((eTime - sTime) * 60);
 
                     const typeClass = slot.operationType.toLowerCase().replace('ç', 'c').replace('é', 'e');
-                    const slotId = `${slot.semaine}_${slot.jour}_${slot.heureDebut}`; 
-                    
+                    const slotId = `${slot.semaine}_${slot.jour}_${slot.heureDebut}`;
+
                     // Add overtime class if flag is true
                     const extraClass = slot.overtime ? 'overtime' : '';
 
@@ -3085,9 +3094,9 @@ function renderVueJournee() {
                              data-slot-id="${slotId}"
                              data-operation='${JSON.stringify({ commandeId: slot.commandeId, operationType: slot.operationType, slotId: slotId }).replace(/'/g, "&#39;")}'
                              style="position: absolute; top: ${topPosition}px; left: 5px; right: 5px; height: ${heightInPixels}px; min-height: ${heightInPixels}px; z-index: ${slot.overtime ? 20 : 10};">
-                            
+
                             ${slot.overtime ? '<div class="overtime-indicator"></div>' : ''}
-                            
+
                             <div class="slot-top-row" style="display: flex; justify-content: space-between; align-items: center; width: 100%; font-size: 0.85em;">
                                 <span class="slot-time" style="font-weight: bold;">${slot.heureDebut}-${slot.heureFin}</span>
                                 <span class="slot-client" style="font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-left: 5px; flex: 1; text-align: right;">${slot.client}</span>
@@ -3098,13 +3107,23 @@ function renderVueJournee() {
                     `;
                 };
 
-                if (crossesLunch) {
-                    // Render Part 1: Start -> 12:30
-                    html += renderSlotDiv(startDecimal, lunchStart, true);
-                    // Render Part 2: 13:00 -> End
-                    html += renderSlotDiv(lunchEnd, endDecimal, true);
+                if (crossedZones.length > 0) {
+                    // Render split parts around blocked zones
+                    let currentPos = startDecimal;
+                    for (const zone of crossedZones) {
+                        // Part before the zone
+                        if (currentPos < zone.start) {
+                            html += renderSlotDiv(currentPos, zone.start, true);
+                        }
+                        // Skip the zone
+                        currentPos = zone.end;
+                    }
+                    // Part after all zones
+                    if (currentPos < endDecimal) {
+                        html += renderSlotDiv(currentPos, endDecimal, true);
+                    }
                 } else {
-                    // Render Normal
+                    // Render Normal (no blocked zone crossed)
                     html += renderSlotDiv(startDecimal, endDecimal);
                 }
             });
@@ -4048,9 +4067,10 @@ function isMachineAvailable(machine, day, week, startTime, duration) {
     const start = timeToDecimalHours(startTime);
     const end = start + duration;
 
-    // Check working hours
-    const dayStart = day === 'Vendredi' ? 7 : 7.5;
-    const dayEnd = day === 'Vendredi' ? 12 : 16.5;
+    // Check working hours - dynamique multi-equipes
+    const globalSchedule = getGlobalScheduleRangeForDay(day);
+    const dayStart = globalSchedule.globalStart;
+    const dayEnd = globalSchedule.globalEnd;
 
     if (start < dayStart - EPSILON) {
         return { valid: false, reason: `L'horaire de début (${startTime}) est avant l'ouverture (${formatDecimalTime(dayStart)}).` };
@@ -4059,25 +4079,15 @@ function isMachineAvailable(machine, day, week, startTime, duration) {
         return { valid: false, reason: `L'opération se termine à ${formatDecimalTime(end)}, ce qui dépasse la fermeture (${formatDecimalTime(dayEnd)}).` };
     }
 
-    // Check lunch break
-    if (day !== 'Vendredi') {
-        const lunchStart = 12.5; // 12:30
-        const lunchEnd = 13.0;   // 13:00
-        
-        // If operation is FULLY inside lunch, that's invalid
-        if (start >= lunchStart && end <= lunchEnd) {
-             return { valid: false, reason: `L'opération ne peut pas être placée entièrement pendant la pause déjeuner.` };
+    // Check blocked zones (pauses + gaps inter-equipes)
+    const blockedZones = getBlockedZonesForDay(day);
+    for (const zone of blockedZones) {
+        // If operation is FULLY inside a blocked zone, that's invalid
+        if (start >= zone.start && end <= zone.end) {
+            return { valid: false, reason: `L'opération ne peut pas être placée entièrement dans "${zone.name}".` };
         }
-        
-        // We now ALLOW spanning across lunch (e.g. 11:00 to 14:00)
-        // The duration check logic in handleDrop will adjust end time.
-        // But here we must check if the *machine* is physically available during the WORK time parts.
-        // Actually, existing slots might also span lunch. 
-        // If I put 11:00-14:30 (3h work), the slot in DB says 11:00-14:30.
-        // My isMachineAvailable check compares 11:00-14:30 against existing slots.
-        // Overlap logic still holds.
-        // The only "forbidden" time is starting/ending *inside* the break? 
-        // Let's say we allow it for now, handleDrop fixes the timing.
+        // We ALLOW spanning across blocked zones (e.g. 11:00 to 14:00)
+        // The split logic will handle it
     }
 
     // Check existing slots
@@ -4185,6 +4195,13 @@ async function handleDrop(e) {
     if (targetTime) {
         const parts = targetTime.split(':');
         dropDecimal = parseInt(parts[0]) + parseInt(parts[1]) / 60;
+    }
+
+    // NOUVEAU: Valider que le drop n'est pas dans une zone bloquee
+    const blockedZone = isTimeInBlockedZone(targetDay, dropDecimal);
+    if (blockedZone) {
+        alert(`Impossible : ${formatDecimalTime(dropDecimal)} est dans "${blockedZone.name}"`);
+        return;
     }
 
     let searchWeek = targetWeek;
@@ -4317,7 +4334,7 @@ async function handleDrop(e) {
                     heureFin: formatDecimalTime(frag.endHour),
                     dateDebut: getDateFromWeekDay(frag.week, frag.day, formatDecimalTime(frag.startHour), frag.year).toISOString(),
                     dateFin: getDateFromWeekDay(frag.week, frag.day, formatDecimalTime(frag.endHour), frag.year).toISOString(),
-                    overtime: frag.startHour >= (frag.day === 'Vendredi' ? 12 : 16.5)
+                    overtime: isInOvertimeZone(frag.day, frag.startHour)
                 }));
 
                 operation.statut = "Planifiée";
@@ -4361,7 +4378,7 @@ async function handleDrop(e) {
             heureFin: formatDecimalTime(endDec),
             dateDebut: getDateFromWeekDay(searchWeek, searchDay, gapStart, searchYear).toISOString(),
             dateFin: getDateFromWeekDay(searchWeek, searchDay, formatDecimalTime(endDec), searchYear).toISOString(),
-            overtime: startDec >= (searchDay === 'Vendredi' ? 12 : 16.5)
+            overtime: isInOvertimeZone(searchDay, startDec)
         }];
 
         operation.statut = "Planifiée";
@@ -6902,6 +6919,91 @@ function getGlobalScheduleRangeForDay(dayName) {
 }
 
 /**
+ * Retourne TOUTES les zones bloquees pour un jour (pauses + gaps inter-equipes)
+ * @param {string} day - Nom du jour
+ * @returns {Array<{start, end, type, name}>}
+ */
+function getBlockedZonesForDay(day) {
+    const blockedZones = [];
+
+    // 1. Ajouter toutes les pauses actives
+    const breaks = getActiveBreaksForDay(day);
+    breaks.forEach(b => {
+        blockedZones.push({
+            start: timeStringToDecimal(b.start),
+            end: timeStringToDecimal(b.end),
+            type: 'break',
+            name: b.name || 'Pause'
+        });
+    });
+
+    // 2. Ajouter les gaps inter-equipes
+    const scheduleRange = getGlobalScheduleRangeForDay(day);
+    if (scheduleRange.gaps) {
+        scheduleRange.gaps.forEach(gap => {
+            blockedZones.push({
+                start: gap.start,
+                end: gap.end,
+                type: 'inter-shift-gap',
+                name: 'Hors horaires'
+            });
+        });
+    }
+
+    return blockedZones.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * Verifie si un temps decimal est dans une zone bloquee
+ * @param {string} day - Nom du jour
+ * @param {number} timeDecimal - Heure en decimal
+ * @returns {object|null} La zone bloquee ou null
+ */
+function isTimeInBlockedZone(day, timeDecimal) {
+    const zones = getBlockedZonesForDay(day);
+    for (const zone of zones) {
+        if (timeDecimal >= zone.start && timeDecimal < zone.end) {
+            return zone;
+        }
+    }
+    return null;
+}
+
+/**
+ * Verifie si un temps est dans la zone d'heures supplementaires
+ * @param {string} day - Nom du jour
+ * @param {number} timeDecimal - Heure en decimal
+ * @returns {boolean}
+ */
+function isInOvertimeZone(day, timeDecimal) {
+    const ranges = getAvailableRangesForDay(day);
+    if (!ranges || ranges.length === 0) {
+        // Fallback sur la logique ancienne
+        const schedule = getScheduleForDay(day);
+        return timeDecimal >= schedule.standardEnd;
+    }
+
+    // Trouver la fin normale (derniere equipe)
+    const lastShiftEnd = Math.max(...ranges.map(r => r.end));
+    return timeDecimal >= lastShiftEnd;
+}
+
+/**
+ * Retourne l'heure de fin des heures sup pour une equipe/jour
+ * @param {string} day - Nom du jour
+ * @param {string} shiftId - ID de l'equipe (optionnel)
+ * @returns {number} Heure de fin en decimal
+ */
+function getOvertimeEndForShift(day, shiftId = null) {
+    if (!scheduleConfig.overtime || !scheduleConfig.overtime.enabled) {
+        // Fallback sur les valeurs par defaut
+        return day === 'Vendredi' ? 14.0 : 18.0;
+    }
+    const slot = scheduleConfig.overtime.slots.find(s => s.days && s.days.includes(day));
+    return slot ? timeStringToDecimal(slot.end) : (day === 'Vendredi' ? 14.0 : 18.0);
+}
+
+/**
  * Calculate Displaceability Score for an operation
  * Plus le score est élevé, plus l'opération peut être déplacée
  */
@@ -7016,9 +7118,11 @@ function findNextAvailableSlotForDisplacement(machine, duration, startDay, start
                 });
             });
 
-        // La pause déjeuner n'est PLUS ajoutée comme busy slot
-        // Le split intelligent s'occupe de splitter avant/après la pause si nécessaire
-        // On la garde uniquement pour les system events qui sont de vraies maintenances
+        // Ajouter les zones bloquees comme busy slots (pauses + gaps inter-equipes)
+        const blockedZones = getBlockedZonesForDay(dayName);
+        blockedZones.forEach(zone => {
+            busySlots.push({ start: zone.start, end: zone.end, type: zone.type });
+        });
 
         // Trier les créneaux occupés
         busySlots.sort((a, b) => a.start - b.start);
@@ -7897,28 +8001,31 @@ function splitAtNormalHoursEnd(operation, machine, startWeek, startYear, startDa
         const schedule = getScheduleForDay(currentDay);
         const normalEnd = schedule.standardEnd; // 16.5 ou 12.0
 
-        // Gérer la pause déjeuner si nécessaire
+        // Gerer toutes les zones bloquees (pauses + gaps inter-equipes)
         let fragmentEnd = currentHour + remainingDuration;
+        const blockedZones = getBlockedZonesForDay(currentDay);
 
-        if (schedule.lunchStart !== null && currentHour < schedule.lunchStart && fragmentEnd > schedule.lunchStart) {
-            // Split avant la pause déjeuner
-            const durationBeforeLunch = schedule.lunchStart - currentHour;
-            console.log(`[SPLIT-NORMAL] ⚠️ Opération chevauche pause déjeuner → split avant pause (${durationBeforeLunch}h)`);
+        for (const zone of blockedZones) {
+            if (currentHour < zone.start && fragmentEnd > zone.start) {
+                // Split avant la zone bloquee
+                const durationBeforeZone = zone.start - currentHour;
+                console.log(`[SPLIT-NORMAL] ⚠️ Opération chevauche ${zone.name} → split avant zone (${durationBeforeZone}h)`);
 
-            fragments.push({
-                duration: durationBeforeLunch,
-                machine: machine,
-                week: currentWeek,
-                year: currentYear,
-                day: currentDay,
-                startHour: currentHour,
-                endHour: schedule.lunchStart,
-                type: operation.type
-            });
+                fragments.push({
+                    duration: durationBeforeZone,
+                    machine: machine,
+                    week: currentWeek,
+                    year: currentYear,
+                    day: currentDay,
+                    startHour: currentHour,
+                    endHour: zone.start,
+                    type: operation.type
+                });
 
-            remainingDuration -= durationBeforeLunch;
-            currentHour = schedule.lunchEnd; // 13:00
-            fragmentEnd = currentHour + remainingDuration;
+                remainingDuration -= durationBeforeZone;
+                currentHour = zone.end; // Sauter apres la zone
+                fragmentEnd = calculateEndTimeWithBreaks(currentHour, remainingDuration, currentDay);
+            }
         }
 
         // Vérifier si dépasse les heures normales
@@ -7994,28 +8101,31 @@ function splitOperationForSlot(operation, machine, startWeek, startYear, startDa
         const schedule = getScheduleForDay(currentDay);
         let availableUntil = schedule.overtimeEnd;
 
-        // Vérifier si on chevauche la pause déjeuner
+        // Verifier si on chevauche une zone bloquee (pauses + gaps inter-equipes)
         let fragmentEnd = currentHour + remainingDuration;
+        const blockedZones = getBlockedZonesForDay(currentDay);
 
-        if (schedule.lunchStart !== null && currentHour < schedule.lunchStart && fragmentEnd > schedule.lunchStart) {
-            // L'opération chevauche la pause déjeuner → split avant la pause
-            const durationBeforeLunch = schedule.lunchStart - currentHour;
-            console.log(`[SPLIT] ⚠️ Operation crosses lunch break → splitting before lunch (${durationBeforeLunch}h)`);
+        for (const zone of blockedZones) {
+            if (currentHour < zone.start && fragmentEnd > zone.start) {
+                // L'operation chevauche une zone bloquee → split avant la zone
+                const durationBeforeZone = zone.start - currentHour;
+                console.log(`[SPLIT] ⚠️ Operation crosses ${zone.name} → splitting before zone (${durationBeforeZone}h)`);
 
-            fragments.push({
-                duration: durationBeforeLunch,
-                machine: machine,
-                week: currentWeek,
-                year: currentYear,
-                day: currentDay,
-                startHour: currentHour,
-                endHour: schedule.lunchStart,
-                type: operation.type || operation.operationType
-            });
+                fragments.push({
+                    duration: durationBeforeZone,
+                    machine: machine,
+                    week: currentWeek,
+                    year: currentYear,
+                    day: currentDay,
+                    startHour: currentHour,
+                    endHour: zone.start,
+                    type: operation.type || operation.operationType
+                });
 
-            remainingDuration -= durationBeforeLunch;
-            currentHour = schedule.lunchEnd; // Reprendre après la pause
-            fragmentEnd = currentHour + remainingDuration;
+                remainingDuration -= durationBeforeZone;
+                currentHour = zone.end; // Sauter apres la zone
+                fragmentEnd = calculateEndTimeWithBreaks(currentHour, remainingDuration, currentDay);
+            }
         }
 
         // Vérifier si l'opération dépasse la fin de journée
@@ -8324,10 +8434,11 @@ function findUrgentSlot(machine, day, duration, minStartHour = 0, targetWeek = s
             });
         });
 
-    // Ajouter la pause déjeuner comme un créneau occupé (Lun-Jeu)
-    if (day !== 'Vendredi') {
-        busySlots.push({ start: 12.5, end: 13.0 }); // 12:30-13:00
-    }
+    // Ajouter toutes les zones bloquees (pauses + gaps inter-equipes) comme creneaux occupes
+    const blockedZones = getBlockedZonesForDay(day);
+    blockedZones.forEach(zone => {
+        busySlots.push({ start: zone.start, end: zone.end, type: zone.type });
+    });
 
     // Trier les créneaux occupés
     busySlots.sort((a, b) => a.start - b.start);

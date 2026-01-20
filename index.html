@@ -78,6 +78,13 @@
                                                         </svg>
                                                         Gérer les machines
                                                     </button>
+                                                    <button id="btnManageSchedule" title="Gérer les horaires de production">
+                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                            <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+                                                            <path d="M8 4v4.5l3 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                                        </svg>
+                                                        Gérer les horaires
+                                                    </button>
                                                     <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
                                                     <div id="storageIndicator" style="padding: 6px 10px; font-size: 12px; color: var(--color-text-muted); display: flex; align-items: center; gap: 6px;">
                                                         <span id="storageText">-- KB / 5 MB</span>
@@ -503,6 +510,172 @@
                     <div class="form-actions">
                         <button type="button" class="btn btn-danger" id="btnDeleteMachine" style="margin-right: auto;">Supprimer</button>
                         <button type="button" class="btn btn-secondary" id="btnCancelMachineEdit">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Enregistrer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Schedule Manager -->
+    <div class="modal" id="modalSchedule">
+        <div class="modal-content modal-schedule-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Gestion des Horaires</h2>
+                <button class="btn-close" id="btnCloseSchedule">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="scheduleManagerContent">
+                    <!-- Section Equipes -->
+                    <div class="schedule-section">
+                        <div class="schedule-section-header">
+                            <h3>Equipes de travail</h3>
+                            <button class="btn btn-sm btn-primary" id="btnAddShift">+ Ajouter equipe</button>
+                        </div>
+                        <div id="shiftsList" class="schedule-items-list">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Section Pauses -->
+                    <div class="schedule-section">
+                        <div class="schedule-section-header">
+                            <h3>Pauses</h3>
+                            <button class="btn btn-sm btn-primary" id="btnAddBreak">+ Ajouter pause</button>
+                        </div>
+                        <div id="breaksList" class="schedule-items-list">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Section Heures supplementaires -->
+                    <div class="schedule-section">
+                        <div class="schedule-section-header">
+                            <h3>Heures supplementaires</h3>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggleOvertime">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div id="overtimeConfig" class="overtime-config">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-actions" style="margin-top: 20px;">
+                    <button class="btn btn-secondary" id="btnResetSchedule">Reinitialiser</button>
+                    <button class="btn btn-secondary" id="btnExportSchedule">Exporter config</button>
+                    <button class="btn btn-secondary" id="btnCloseScheduleBottom">Fermer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Shift Edit/Add -->
+    <div class="modal" id="modalShiftEdit">
+        <div class="modal-content modal-shift-edit-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="shiftEditTitle">Modifier l'equipe</h2>
+                <button class="btn-close" id="btnCloseShiftEdit">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="formShiftEdit">
+                    <input type="hidden" id="shiftEditId">
+
+                    <div class="form-group">
+                        <label for="shiftEditName">Nom de l'equipe</label>
+                        <input type="text" id="shiftEditName" placeholder="Ex: Equipe Nuit" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Jours travailles</label>
+                        <div class="days-checkboxes" id="shiftDaysCheckboxes">
+                            <label><input type="checkbox" name="shiftDay" value="Lundi"> Lundi</label>
+                            <label><input type="checkbox" name="shiftDay" value="Mardi"> Mardi</label>
+                            <label><input type="checkbox" name="shiftDay" value="Mercredi"> Mercredi</label>
+                            <label><input type="checkbox" name="shiftDay" value="Jeudi"> Jeudi</label>
+                            <label><input type="checkbox" name="shiftDay" value="Vendredi"> Vendredi</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Horaires par jour</label>
+                        <div id="shiftSchedulesContainer" class="shift-schedules-container">
+                            <!-- Populated by JS based on selected days -->
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="shiftEditActive">Statut</label>
+                            <select id="shiftEditActive">
+                                <option value="true">Active</option>
+                                <option value="false">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-danger" id="btnDeleteShift" style="margin-right: auto;">Supprimer</button>
+                        <button type="button" class="btn btn-secondary" id="btnCancelShiftEdit">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Enregistrer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Break Edit/Add -->
+    <div class="modal" id="modalBreakEdit">
+        <div class="modal-content modal-break-edit-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="breakEditTitle">Modifier la pause</h2>
+                <button class="btn-close" id="btnCloseBreakEdit">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="formBreakEdit">
+                    <input type="hidden" id="breakEditId">
+
+                    <div class="form-group">
+                        <label for="breakEditName">Nom de la pause</label>
+                        <input type="text" id="breakEditName" placeholder="Ex: Pause cafe" required>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="breakEditStart">Heure debut</label>
+                            <input type="time" id="breakEditStart" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="breakEditEnd">Heure fin</label>
+                            <input type="time" id="breakEditEnd" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Jours concernes</label>
+                        <div class="days-checkboxes" id="breakDaysCheckboxes">
+                            <label><input type="checkbox" name="breakDay" value="Lundi"> Lundi</label>
+                            <label><input type="checkbox" name="breakDay" value="Mardi"> Mardi</label>
+                            <label><input type="checkbox" name="breakDay" value="Mercredi"> Mercredi</label>
+                            <label><input type="checkbox" name="breakDay" value="Jeudi"> Jeudi</label>
+                            <label><input type="checkbox" name="breakDay" value="Vendredi"> Vendredi</label>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="breakEditActive">Statut</label>
+                            <select id="breakEditActive">
+                                <option value="true">Active</option>
+                                <option value="false">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-danger" id="btnDeleteBreak" style="margin-right: auto;">Supprimer</button>
+                        <button type="button" class="btn btn-secondary" id="btnCancelBreakEdit">Annuler</button>
                         <button type="submit" class="btn btn-primary">Enregistrer</button>
                     </div>
                 </form>

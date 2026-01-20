@@ -3562,3 +3562,300 @@ body.dragging-desaffectation .sidebar-dropzone-desaffect {
     border-color: #bd2130;
 }
 
+/* ===================================
+   Schedule Manager Modal
+   =================================== */
+
+.modal-schedule-content {
+    max-width: 700px;
+}
+
+.schedule-section {
+    margin-bottom: 24px;
+}
+
+.schedule-section:last-child {
+    margin-bottom: 0;
+}
+
+.schedule-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--color-border);
+}
+
+.schedule-section-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.schedule-items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.shift-item, .break-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--color-background);
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+}
+
+.shift-item:hover, .break-item:hover {
+    background: #e9ecef;
+    border-color: var(--color-border);
+}
+
+.shift-icon, .break-icon {
+    font-size: 20px;
+    width: 32px;
+    text-align: center;
+}
+
+.shift-info, .break-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.shift-name, .break-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--color-text);
+}
+
+.shift-details, .break-details {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+.shift-days {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.shift-day {
+    padding: 2px 6px;
+    background: var(--color-primary);
+    color: white;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.shift-day.inactive {
+    background: #6c757d;
+}
+
+.shift-status, .break-status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.shift-status.status-active, .break-status.status-active {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.shift-status.status-inactive, .break-status.status-inactive {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 26px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.3s;
+    border-radius: 26px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: var(--color-primary);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(24px);
+}
+
+/* Overtime Config */
+.overtime-config {
+    padding: 12px;
+    background: var(--color-background);
+    border-radius: var(--border-radius);
+    margin-top: 12px;
+}
+
+.overtime-config.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.overtime-slot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.overtime-slot:last-child {
+    border-bottom: none;
+}
+
+.overtime-slot-days {
+    flex: 1;
+    font-size: 13px;
+    color: var(--color-text);
+}
+
+.overtime-slot-time {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-primary);
+}
+
+/* Shift Edit Modal */
+.modal-shift-edit-content {
+    max-width: 500px;
+}
+
+.days-checkboxes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 8px 0;
+}
+
+.days-checkboxes label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 6px 12px;
+    background: var(--color-background);
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--color-border);
+    transition: all 0.2s;
+}
+
+.days-checkboxes label:has(input:checked) {
+    background: var(--color-primary);
+    color: white;
+    border-color: var(--color-primary);
+}
+
+.days-checkboxes input[type="checkbox"] {
+    display: none;
+}
+
+.shift-schedules-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 8px;
+    background: var(--color-background);
+    border-radius: var(--border-radius);
+}
+
+.shift-schedule-row {
+    display: grid;
+    grid-template-columns: 100px 1fr 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 8px;
+    background: white;
+    border-radius: var(--border-radius-sm);
+}
+
+.shift-schedule-row label {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.shift-schedule-row input[type="time"] {
+    padding: 6px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-sm);
+    font-size: 13px;
+}
+
+/* Break Edit Modal */
+.modal-break-edit-content {
+    max-width: 450px;
+}
+
+/* Break Slot Visualization on Timeline */
+.break-slot {
+    position: absolute;
+    left: 0;
+    right: 0;
+    background: repeating-linear-gradient(
+        45deg,
+        rgba(0,0,0,0.05),
+        rgba(0,0,0,0.05) 5px,
+        transparent 5px,
+        transparent 10px
+    );
+    pointer-events: none;
+    z-index: 5;
+    border-top: 1px dashed #aaa;
+    border-bottom: 1px dashed #aaa;
+}
+
+.no-shifts, .no-breaks {
+    color: var(--color-text-secondary);
+    font-style: italic;
+    padding: 12px;
+    text-align: center;
+}
+

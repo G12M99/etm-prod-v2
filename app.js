@@ -6,6 +6,10 @@
 const MACHINES_STORAGE_KEY = 'etm_machines_config';
 let machinesConfig = JSON.parse(JSON.stringify(MACHINES_CONFIG));
 
+// Configuration des horaires - Clone mutable de la configuration
+const SCHEDULE_STORAGE_KEY = 'etm_schedule_config';
+let scheduleConfig = JSON.parse(JSON.stringify(SCHEDULE_DEFAULT_CONFIG));
+
 // Variables de compatibilité avec le code existant
 let MACHINES = {
     cisailles: machinesConfig.cisaillage.filter(m => m.active).map(m => m.name),
@@ -53,16 +57,17 @@ function getMachineTypeClass(machineName) {
     return type ? `machine-type-${type}` : '';
 }
 
-const HOURS_PER_DAY = {
-    'Lundi': 8.5,      // 07:30-12:30 (5h) + 13:00-16:30 (3.5h)
+// Variables d'horaires dynamiques (calculees depuis scheduleConfig)
+let HOURS_PER_DAY = {
+    'Lundi': 8.5,
     'Mardi': 8.5,
     'Mercredi': 8.5,
     'Jeudi': 8.5,
-    'Vendredi': 5      // 07:00-12:00
+    'Vendredi': 5
 };
 
 const DAYS_OF_WEEK = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
-const TOTAL_HOURS_PER_WEEK = 39; // 8.5*4 + 5
+let TOTAL_HOURS_PER_WEEK = 39;
 
 // --- NEW CONFIGURATION V2.1 (Urgent/Overbooking) ---
 
@@ -131,8 +136,8 @@ DAYS_OF_WEEK.forEach(day => {
     overtimeTracker.byDay[day] = 0;
 });
 
-// Lunch break configuration (Monday-Thursday only)
-const LUNCH_BREAK = {
+// Lunch break configuration (Monday-Thursday only) - dynamique
+let LUNCH_BREAK = {
     start: '12:30',
     end: '13:00',
     duration: 0.5  // 30 minutes
@@ -1529,14 +1534,18 @@ function calculerCapaciteSemaineGlobale(semaine, annee) {
  * @returns {string|null} Start time (HH:MM) or null if no gap found
  */
 /**
- * Helper: Calculate End Time accounting for Lunch Break (Mon-Thu 12:30-13:00)
+ * Helper: Calculate End Time accounting for Lunch Break - dynamique basé sur SCHEDULE_CONFIG
  */
 function calculateEndTimeWithLunch(startDec, duration, day) {
-    if (day === 'Vendredi') return startDec + duration;
+    const schedule = getScheduleForDay(day);
+    const lunchStart = schedule.lunchStart;
+    const lunchEnd = schedule.lunchEnd;
 
-    const lunchStart = 12.5;
-    const lunchEnd = 13.0;
-    
+    // Si pas de pause déjeuner (ex: Vendredi), pas d'impact
+    if (lunchStart === null || lunchEnd === null) {
+        return startDec + duration;
+    }
+
     // If we start after lunch, no impact
     if (startDec >= lunchStart) {
         // But if we start strictly inside lunch (should be prevented by search logic, but for safety)
@@ -1547,8 +1556,9 @@ function calculateEndTimeWithLunch(startDec, duration, day) {
     // We start before lunch. Check if we hit it.
     const tentativeEnd = startDec + duration;
     if (tentativeEnd > lunchStart) {
-        // We span lunch. Add the break duration (0.5) to the end.
-        return tentativeEnd + 0.5;
+        // We span lunch. Add the break duration to the end.
+        const lunchDuration = lunchEnd - lunchStart;
+        return tentativeEnd + lunchDuration;
     }
 
     return tentativeEnd;
@@ -2864,9 +2874,10 @@ function renderVueJournee() {
             const monthNum = (dateObj.getMonth() + 1).toString().padStart(2, '0');
             const formattedDate = `${dayNum}/${monthNum}`;
 
-            // Timeline hours: Fri 07:00-12:00, Mon-Thu 07:30-16:30
-            const startHourTimeline = day === 'Vendredi' ? 7 : 7.5;
-            const endHourTimeline = day === 'Vendredi' ? 12 : 16.5;
+            // Timeline hours: dynamique basé sur SCHEDULE_CONFIG
+            const daySchedule = getScheduleForDay(day);
+            const startHourTimeline = daySchedule.start;
+            const endHourTimeline = daySchedule.overtimeEnd;
 
             html += `
                 <div class="day-cell ${day === 'Vendredi' ? 'friday' : ''} ${getMachineTypeClass(machine)}"
@@ -2932,46 +2943,23 @@ function renderVueJournee() {
             // Create hourly time grid (background)
             html += '<div class="time-grid">';
             
-            // Generate time slots based on day (30 min intervals)
-            if (day === 'Vendredi') {
-                // Friday: 07:00-12:00 + Overtime up to 14:00
-                for (let h = 7; h < 14; h += 0.5) {
-                    const hour = Math.floor(h);
-                    const minute = (h % 1 === 0.5) ? '30' : '00';
-                    const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
-                    const isHalf = (h % 1 === 0.5);
-                    
-                    html += `
-                        <div class="time-slot drop-zone ${isHalf ? 'half-hour' : 'full-hour'}"
-                             data-machine="${machine}"
-                             data-day="${day}"
-                             data-week="${semaineSelectionnee}"
-                             data-hour="${h}"
-                             data-time="${timeSlot}">
-                            <div class="time-label">${timeSlot}</div>
-                        </div>
-                    `;
-                }
-            } else {
-                // Mon-Thu: 07:30-16:30 + Overtime up to 18:00
-                // Render up to 18:30 to be safe
-                for (let h = 7.5; h < 18.5; h += 0.5) { 
-                    const hour = Math.floor(h);
-                    const minute = (h % 1 === 0.5) ? '30' : '00';
-                    const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
-                    const isHalf = (h % 1 === 0.5);
+            // Generate time slots based on day (30 min intervals) - dynamique
+            for (let h = daySchedule.start; h < daySchedule.overtimeEnd; h += 0.5) {
+                const hour = Math.floor(h);
+                const minute = (h % 1 === 0.5) ? '30' : '00';
+                const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
+                const isHalf = (h % 1 === 0.5);
 
-                    html += `
-                        <div class="time-slot drop-zone ${isHalf ? 'half-hour' : 'full-hour'}"
-                             data-machine="${machine}"
-                             data-day="${day}"
-                             data-week="${semaineSelectionnee}"
-                             data-hour="${h}"
-                             data-time="${timeSlot}">
-                            <div class="time-label">${timeSlot}</div>
-                        </div>
-                    `;
-                }
+                html += `
+                    <div class="time-slot drop-zone ${isHalf ? 'half-hour' : 'full-hour'}"
+                         data-machine="${machine}"
+                         data-day="${day}"
+                         data-week="${semaineSelectionnee}"
+                         data-hour="${h}"
+                         data-time="${timeSlot}">
+                        <div class="time-label">${timeSlot}</div>
+                    </div>
+                `;
             }
             html += '</div>';
 
@@ -3009,18 +2997,17 @@ function renderVueJournee() {
                     `;
                 });
 
-            // 1. Add lunch break visual
-            if (day !== 'Vendredi') {
-                const lunchStartDecimal = 12.5; 
-                const lunchEndDecimal = 13.0;   
+            // 1. Add lunch break visual - dynamique basé sur SCHEDULE_CONFIG
+            if (daySchedule.lunchStart !== null && daySchedule.lunchEnd !== null) {
+                const lunchStartDecimal = daySchedule.lunchStart;
+                const lunchEndDecimal = daySchedule.lunchEnd;
                 const topLunch = (lunchStartDecimal - startHourTimeline) * 60;
                 const heightLunch = (lunchEndDecimal - lunchStartDecimal) * 60;
                 html += `<div class="lunch-break" style="top: ${topLunch}px; height: ${heightLunch}px;"></div>`;
             }
 
-            // 2. Add Overtime Separator
-            // Mon-Thu: 16:30 (16.5), Fri: 12:00 (12.0)
-            const separatorTime = day === 'Vendredi' ? 12 : 16.5;
+            // 2. Add Overtime Separator - dynamique basé sur SCHEDULE_CONFIG
+            const separatorTime = daySchedule.standardEnd;
             const separatorTop = (separatorTime - startHourTimeline) * 60;
             html += `<div class="overtime-separator" style="top: ${separatorTop}px;"></div>`;
 
@@ -6810,7 +6797,7 @@ function formatTimeRange(start, end) {
 // SMART SCENARIO - CONSTANTS & CONFIGURATION
 // ===================================================================
 
-const SCHEDULE_CONFIG = {
+let SCHEDULE_CONFIG = {
     MONDAY_TO_THURSDAY: {
         start: 7.5,          // 07:30
         standardEnd: 16.5,   // 16:30
@@ -6825,11 +6812,11 @@ const SCHEDULE_CONFIG = {
         lunchStart: null,    // Pas de pause le vendredi
         lunchEnd: null
     },
-    CR_THRESHOLD: 1.05,       // Critical Ratio minimum après déplacement
-    CR_FORCE_THRESHOLD: 0.95, // En mode FORCE, on accepte jusqu'à 0.95
+    CR_THRESHOLD: 1.05,       // Critical Ratio minimum apres deplacement
+    CR_FORCE_THRESHOLD: 0.95, // En mode FORCE, on accepte jusqu'a 0.95
     MAX_DISPLACEMENTS_NORMAL: 5,
     MAX_DISPLACEMENTS_FORCE: 20,
-    // Fragmentation supprimée : les opérations ne se splitent QUE si pause/multi-jours
+    // Fragmentation supprimee : les operations ne se splitent QUE si pause/multi-jours
     SEARCH_HORIZON_DAYS: 14
 };
 
@@ -8895,11 +8882,15 @@ async function init() {
     // Charger la configuration des machines depuis localStorage
     loadMachinesConfig();
 
+    // Charger la configuration des horaires depuis localStorage
+    loadScheduleConfig();
+
     // Safe initialization of UI components
     if (typeof updateCurrentTime === 'function') updateCurrentTime();
     if (typeof initEventHandlers === 'function') initEventHandlers();
     if (typeof initSyncHandlers === 'function') initSyncHandlers();
     if (typeof initMachineManagerHandlers === 'function') initMachineManagerHandlers();
+    if (typeof initScheduleManagerHandlers === 'function') initScheduleManagerHandlers();
 
     // Start clock (Real-time update)
     setInterval(() => {
@@ -9410,3 +9401,785 @@ function initMachineManagerHandlers() {
 // Exposer les fonctions globalement
 window.openMachineEdit = openMachineEdit;
 window.closeMachineEdit = closeMachineEdit;
+
+// ===================================================================
+// SCHEDULE MANAGER - Gestion dynamique des horaires
+// ===================================================================
+
+/**
+ * Charge la configuration des horaires depuis localStorage
+ */
+function loadScheduleConfig() {
+    try {
+        const saved = localStorage.getItem(SCHEDULE_STORAGE_KEY);
+        if (saved) {
+            scheduleConfig = JSON.parse(saved);
+            console.log('[ScheduleConfig] Configuration chargee depuis localStorage');
+        }
+    } catch (e) {
+        console.error('[ScheduleConfig] Erreur chargement:', e);
+        scheduleConfig = JSON.parse(JSON.stringify(SCHEDULE_DEFAULT_CONFIG));
+    }
+    reloadScheduleArrays();
+}
+
+/**
+ * Sauvegarde la configuration des horaires dans localStorage
+ */
+function saveScheduleConfig() {
+    try {
+        localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(scheduleConfig));
+        console.log('[ScheduleConfig] Configuration sauvegardee');
+    } catch (e) {
+        console.error('[ScheduleConfig] Erreur sauvegarde:', e);
+    }
+}
+
+/**
+ * Convertit une heure "HH:MM" en decimal (ex: "07:30" -> 7.5)
+ */
+function timeStringToDecimal(timeStr) {
+    if (!timeStr) return 0;
+    const [h, m] = timeStr.split(':').map(Number);
+    return h + m / 60;
+}
+
+/**
+ * Retourne les plages horaires disponibles pour un jour donne
+ * en combinant TOUTES les equipes actives
+ */
+function getAvailableRangesForDay(day) {
+    const ranges = [];
+    scheduleConfig.shifts.filter(s => s.active && s.schedules && s.schedules[day]).forEach(shift => {
+        const schedule = shift.schedules[day];
+        ranges.push({
+            shiftId: shift.id,
+            shiftName: shift.name,
+            start: timeStringToDecimal(schedule.start),
+            end: timeStringToDecimal(schedule.end)
+        });
+    });
+    // Trier par heure de debut
+    return ranges.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * Retourne toutes les pauses actives pour un jour
+ */
+function getActiveBreaksForDay(day) {
+    return scheduleConfig.breaks.filter(b => b.active && b.days && b.days.includes(day));
+}
+
+/**
+ * Calcule le total d'heures disponibles par jour (toutes equipes confondues)
+ */
+function calculateHoursPerDay() {
+    const result = {};
+
+    DAYS_OF_WEEK.forEach(day => {
+        const ranges = getAvailableRangesForDay(day);
+        let totalHours = 0;
+
+        ranges.forEach(range => {
+            let hours = range.end - range.start;
+
+            // Soustraire les pauses actives qui chevauchent cette plage
+            getActiveBreaksForDay(day).forEach(b => {
+                const breakStart = timeStringToDecimal(b.start);
+                const breakEnd = timeStringToDecimal(b.end);
+
+                // Si la pause chevauche cette plage
+                if (breakStart < range.end && breakEnd > range.start) {
+                    const overlapStart = Math.max(breakStart, range.start);
+                    const overlapEnd = Math.min(breakEnd, range.end);
+                    hours -= (overlapEnd - overlapStart);
+                }
+            });
+
+            totalHours += Math.max(0, hours);
+        });
+
+        if (totalHours > 0) result[day] = totalHours;
+    });
+
+    return result;
+}
+
+/**
+ * Retourne la pause dejeuner principale active (pour compatibilite)
+ */
+function getActiveLunchBreak() {
+    const dejeuner = scheduleConfig.breaks.find(b => b.active && b.id === 'dejeuner');
+    if (dejeuner) {
+        return {
+            start: dejeuner.start,
+            end: dejeuner.end,
+            duration: timeStringToDecimal(dejeuner.end) - timeStringToDecimal(dejeuner.start)
+        };
+    }
+    // Retourner une valeur par defaut si pas de pause dejeuner active
+    return { start: '12:30', end: '13:00', duration: 0.5 };
+}
+
+/**
+ * Construit la config horaire dynamique pour un jour
+ */
+function buildScheduleConfigForDay(day) {
+    const ranges = getAvailableRangesForDay(day);
+    if (ranges.length === 0) return null;
+
+    const breaks = getActiveBreaksForDay(day);
+    const overtime = scheduleConfig.overtime;
+    const overtimeSlot = overtime && overtime.enabled ? overtime.slots.find(s => s.days.includes(day)) : null;
+
+    // Plage totale = du debut de la premiere equipe a la fin de la derniere
+    const dayStart = Math.min(...ranges.map(r => r.start));
+    const dayEnd = Math.max(...ranges.map(r => r.end));
+    const overtimeEnd = overtimeSlot ? timeStringToDecimal(overtimeSlot.end) : dayEnd;
+
+    // Pauses pour ce jour
+    const lunchBreak = breaks.find(b => b.id === 'dejeuner');
+
+    return {
+        start: dayStart,
+        standardEnd: dayEnd,
+        overtimeEnd: Math.max(dayEnd, overtimeEnd),
+        lunchStart: lunchBreak ? timeStringToDecimal(lunchBreak.start) : null,
+        lunchEnd: lunchBreak ? timeStringToDecimal(lunchBreak.end) : null,
+        breaks: breaks.map(b => ({
+            start: timeStringToDecimal(b.start),
+            end: timeStringToDecimal(b.end),
+            name: b.name
+        })),
+        ranges: ranges
+    };
+}
+
+/**
+ * Reconstruit SCHEDULE_CONFIG a partir de scheduleConfig dynamique
+ */
+function buildScheduleConfig() {
+    const mondayConfig = buildScheduleConfigForDay('Lundi');
+    const fridayConfig = buildScheduleConfigForDay('Vendredi');
+
+    return {
+        MONDAY_TO_THURSDAY: mondayConfig || {
+            start: 7.5,
+            standardEnd: 16.5,
+            overtimeEnd: 18.0,
+            lunchStart: 12.5,
+            lunchEnd: 13.0
+        },
+        FRIDAY: fridayConfig || {
+            start: 7.0,
+            standardEnd: 12.0,
+            overtimeEnd: 14.0,
+            lunchStart: null,
+            lunchEnd: null
+        },
+        CR_THRESHOLD: SCHEDULE_CONFIG.CR_THRESHOLD || 1.05,
+        CR_FORCE_THRESHOLD: SCHEDULE_CONFIG.CR_FORCE_THRESHOLD || 0.95,
+        MAX_DISPLACEMENTS_NORMAL: SCHEDULE_CONFIG.MAX_DISPLACEMENTS_NORMAL || 5,
+        MAX_DISPLACEMENTS_FORCE: SCHEDULE_CONFIG.MAX_DISPLACEMENTS_FORCE || 20,
+        SEARCH_HORIZON_DAYS: SCHEDULE_CONFIG.SEARCH_HORIZON_DAYS || 14
+    };
+}
+
+/**
+ * Recharge les tableaux d'horaires depuis scheduleConfig
+ */
+function reloadScheduleArrays() {
+    // Recalculer HOURS_PER_DAY depuis scheduleConfig.shifts
+    HOURS_PER_DAY = calculateHoursPerDay();
+
+    // Recalculer LUNCH_BREAK depuis scheduleConfig.breaks
+    LUNCH_BREAK = getActiveLunchBreak();
+
+    // Recalculer SCHEDULE_CONFIG
+    SCHEDULE_CONFIG = buildScheduleConfig();
+
+    // Recalculer TOTAL_HOURS_PER_WEEK
+    TOTAL_HOURS_PER_WEEK = Object.values(HOURS_PER_DAY).reduce((a, b) => a + b, 0);
+
+    console.log('[ScheduleConfig] Arrays recharges:', {
+        HOURS_PER_DAY,
+        LUNCH_BREAK,
+        TOTAL_HOURS_PER_WEEK
+    });
+}
+
+/**
+ * Verifie et desaffecte les operations hors des nouveaux horaires
+ */
+function checkAndUnassignOutOfScheduleOperations() {
+    let unassignedCount = 0;
+
+    commandes.forEach(cmd => {
+        cmd.operations?.forEach(op => {
+            if (!op.slots || op.slots.length === 0) return;
+
+            op.slots = op.slots.filter(slot => {
+                const dayConfig = buildScheduleConfigForDay(slot.jour);
+                if (!dayConfig) {
+                    unassignedCount++;
+                    return false; // Jour non travaille
+                }
+
+                const slotStart = timeToDecimalHours(slot.heureDebut);
+                const slotEnd = slotStart + slot.duree;
+
+                // Verifier si le slot est dans les plages valides
+                const isValid = dayConfig.ranges.some(range =>
+                    slotStart >= range.start && slotEnd <= range.end
+                ) || (slotStart >= dayConfig.start && slotEnd <= dayConfig.overtimeEnd);
+
+                if (!isValid) unassignedCount++;
+                return isValid;
+            });
+        });
+
+        // Mettre a jour statut si plus d'operations placees
+        if (cmd.statut === 'Planifiee') {
+            const hasPlacedOps = cmd.operations?.some(op => op.slots && op.slots.length > 0);
+            if (!hasPlacedOps) cmd.statut = 'En attente';
+        }
+    });
+
+    if (unassignedCount > 0) {
+        syncManager.saveLocalData();
+        Toast.warning(`${unassignedCount} operation(s) desaffectee(s) (hors nouveaux horaires)`);
+    }
+
+    return unassignedCount;
+}
+
+/**
+ * Ouvre le gestionnaire d'horaires
+ */
+function openScheduleManager() {
+    document.getElementById('modalSchedule').style.display = 'flex';
+    renderScheduleManager();
+}
+
+/**
+ * Ferme le gestionnaire d'horaires
+ */
+function closeScheduleManager() {
+    document.getElementById('modalSchedule').style.display = 'none';
+}
+
+/**
+ * Affiche le contenu du gestionnaire d'horaires
+ */
+function renderScheduleManager() {
+    // Render shifts
+    const shiftsList = document.getElementById('shiftsList');
+    if (scheduleConfig.shifts && scheduleConfig.shifts.length > 0) {
+        shiftsList.innerHTML = scheduleConfig.shifts.map(shift => {
+            const daysHtml = shift.days.map(d => `<span class="shift-day">${d.substring(0, 3)}</span>`).join('');
+            const statusClass = shift.active ? 'status-active' : 'status-inactive';
+            const statusText = shift.active ? 'Active' : 'Inactive';
+
+            // Calculer les horaires representatifs (premier jour)
+            const firstDay = shift.days[0];
+            const schedule = shift.schedules && shift.schedules[firstDay];
+            const timeInfo = schedule ? `${schedule.start} - ${schedule.end}` : '';
+
+            return `
+                <div class="shift-item" onclick="openShiftEdit('${shift.id}')">
+                    <span class="shift-icon">👷</span>
+                    <div class="shift-info">
+                        <span class="shift-name">${shift.name}</span>
+                        <span class="shift-details">${timeInfo}</span>
+                        <div class="shift-days">${daysHtml}</div>
+                    </div>
+                    <span class="shift-status ${statusClass}">${statusText}</span>
+                </div>
+            `;
+        }).join('');
+    } else {
+        shiftsList.innerHTML = '<div class="no-shifts">Aucune equipe configuree</div>';
+    }
+
+    // Render breaks
+    const breaksList = document.getElementById('breaksList');
+    if (scheduleConfig.breaks && scheduleConfig.breaks.length > 0) {
+        breaksList.innerHTML = scheduleConfig.breaks.map(brk => {
+            const daysHtml = brk.days.map(d => `<span class="shift-day">${d.substring(0, 3)}</span>`).join('');
+            const statusClass = brk.active ? 'status-active' : 'status-inactive';
+            const statusText = brk.active ? 'Active' : 'Inactive';
+
+            return `
+                <div class="break-item" onclick="openBreakEdit('${brk.id}')">
+                    <span class="break-icon">☕</span>
+                    <div class="break-info">
+                        <span class="break-name">${brk.name}</span>
+                        <span class="break-details">${brk.start} - ${brk.end}</span>
+                        <div class="shift-days">${daysHtml}</div>
+                    </div>
+                    <span class="break-status ${statusClass}">${statusText}</span>
+                </div>
+            `;
+        }).join('');
+    } else {
+        breaksList.innerHTML = '<div class="no-breaks">Aucune pause configuree</div>';
+    }
+
+    // Render overtime
+    const toggleOvertime = document.getElementById('toggleOvertime');
+    const overtimeConfig = document.getElementById('overtimeConfig');
+
+    if (toggleOvertime) {
+        toggleOvertime.checked = scheduleConfig.overtime && scheduleConfig.overtime.enabled;
+    }
+
+    if (overtimeConfig && scheduleConfig.overtime) {
+        overtimeConfig.classList.toggle('disabled', !scheduleConfig.overtime.enabled);
+
+        let slotsHtml = '';
+        if (scheduleConfig.overtime.slots) {
+            slotsHtml = scheduleConfig.overtime.slots.map(slot => `
+                <div class="overtime-slot">
+                    <span class="overtime-slot-days">${slot.days.join(', ')}</span>
+                    <span class="overtime-slot-time">${slot.start} - ${slot.end}</span>
+                </div>
+            `).join('');
+        }
+
+        overtimeConfig.innerHTML = `
+            ${slotsHtml}
+            <div style="margin-top: 8px; font-size: 12px; color: var(--color-text-secondary);">
+                Max: ${scheduleConfig.overtime.maxDailyHours}h/jour, ${scheduleConfig.overtime.maxWeeklyHours}h/semaine
+            </div>
+        `;
+    }
+}
+
+/**
+ * Ouvre le modal d'edition d'equipe
+ */
+function openShiftEdit(shiftId = null) {
+    const modal = document.getElementById('modalShiftEdit');
+    const title = document.getElementById('shiftEditTitle');
+    const deleteBtn = document.getElementById('btnDeleteShift');
+    const form = document.getElementById('formShiftEdit');
+
+    form.reset();
+
+    if (shiftId) {
+        // Mode edition
+        const shift = scheduleConfig.shifts.find(s => s.id === shiftId);
+        if (!shift) return;
+
+        title.textContent = "Modifier l'equipe";
+        deleteBtn.style.display = 'block';
+
+        document.getElementById('shiftEditId').value = shift.id;
+        document.getElementById('shiftEditName').value = shift.name;
+        document.getElementById('shiftEditActive').value = shift.active ? 'true' : 'false';
+
+        // Cocher les jours
+        document.querySelectorAll('#shiftDaysCheckboxes input[name="shiftDay"]').forEach(cb => {
+            cb.checked = shift.days.includes(cb.value);
+        });
+
+        // Afficher les horaires par jour
+        updateShiftSchedulesDisplay(shift.schedules || {});
+    } else {
+        // Mode ajout
+        title.textContent = "Ajouter une equipe";
+        deleteBtn.style.display = 'none';
+        document.getElementById('shiftEditId').value = '';
+
+        // Cocher tous les jours par defaut
+        document.querySelectorAll('#shiftDaysCheckboxes input[name="shiftDay"]').forEach(cb => {
+            cb.checked = true;
+        });
+
+        updateShiftSchedulesDisplay({});
+    }
+
+    modal.style.display = 'flex';
+}
+
+/**
+ * Met a jour l'affichage des horaires par jour
+ */
+function updateShiftSchedulesDisplay(schedules) {
+    const container = document.getElementById('shiftSchedulesContainer');
+    const selectedDays = Array.from(document.querySelectorAll('#shiftDaysCheckboxes input[name="shiftDay"]:checked'))
+        .map(cb => cb.value);
+
+    if (selectedDays.length === 0) {
+        container.innerHTML = '<div style="color: var(--color-text-secondary); padding: 12px;">Selectionnez au moins un jour</div>';
+        return;
+    }
+
+    container.innerHTML = selectedDays.map(day => {
+        const schedule = schedules[day] || { start: '07:30', end: '16:30' };
+        if (day === 'Vendredi' && !schedules[day]) {
+            schedule.start = '07:00';
+            schedule.end = '12:00';
+        }
+
+        return `
+            <div class="shift-schedule-row" data-day="${day}">
+                <label>${day}</label>
+                <input type="time" name="scheduleStart_${day}" value="${schedule.start}" required>
+                <input type="time" name="scheduleEnd_${day}" value="${schedule.end}" required>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Ferme le modal d'edition d'equipe
+ */
+function closeShiftEdit() {
+    document.getElementById('modalShiftEdit').style.display = 'none';
+}
+
+/**
+ * Sauvegarde l'equipe editee
+ */
+function saveShiftEdit() {
+    const shiftId = document.getElementById('shiftEditId').value;
+    const name = document.getElementById('shiftEditName').value.trim();
+    const active = document.getElementById('shiftEditActive').value === 'true';
+
+    if (!name) {
+        Toast.error('Veuillez entrer un nom');
+        return;
+    }
+
+    // Recuperer les jours selectionnes
+    const days = Array.from(document.querySelectorAll('#shiftDaysCheckboxes input[name="shiftDay"]:checked'))
+        .map(cb => cb.value);
+
+    if (days.length === 0) {
+        Toast.error('Selectionnez au moins un jour');
+        return;
+    }
+
+    // Recuperer les horaires par jour
+    const schedules = {};
+    days.forEach(day => {
+        const startInput = document.querySelector(`input[name="scheduleStart_${day}"]`);
+        const endInput = document.querySelector(`input[name="scheduleEnd_${day}"]`);
+        if (startInput && endInput) {
+            schedules[day] = {
+                start: startInput.value,
+                end: endInput.value
+            };
+        }
+    });
+
+    if (shiftId) {
+        // Mode edition
+        const index = scheduleConfig.shifts.findIndex(s => s.id === shiftId);
+        if (index !== -1) {
+            scheduleConfig.shifts[index] = {
+                ...scheduleConfig.shifts[index],
+                name,
+                active,
+                days,
+                schedules
+            };
+            Toast.success('Equipe modifiee');
+        }
+    } else {
+        // Mode ajout
+        const newId = `shift-${Date.now()}`;
+        scheduleConfig.shifts.push({
+            id: newId,
+            name,
+            active,
+            days,
+            schedules
+        });
+        Toast.success('Equipe ajoutee');
+    }
+
+    saveScheduleConfig();
+    reloadScheduleArrays();
+    checkAndUnassignOutOfScheduleOperations();
+    closeShiftEdit();
+    renderScheduleManager();
+    refresh();
+}
+
+/**
+ * Supprime une equipe
+ */
+function deleteShift() {
+    const shiftId = document.getElementById('shiftEditId').value;
+    if (!shiftId) return;
+
+    if (!confirm('Etes-vous sur de vouloir supprimer cette equipe ?')) return;
+
+    const index = scheduleConfig.shifts.findIndex(s => s.id === shiftId);
+    if (index !== -1) {
+        scheduleConfig.shifts.splice(index, 1);
+
+        saveScheduleConfig();
+        reloadScheduleArrays();
+        checkAndUnassignOutOfScheduleOperations();
+        closeShiftEdit();
+        renderScheduleManager();
+        refresh();
+        Toast.success('Equipe supprimee');
+    }
+}
+
+/**
+ * Ouvre le modal d'edition de pause
+ */
+function openBreakEdit(breakId = null) {
+    const modal = document.getElementById('modalBreakEdit');
+    const title = document.getElementById('breakEditTitle');
+    const deleteBtn = document.getElementById('btnDeleteBreak');
+    const form = document.getElementById('formBreakEdit');
+
+    form.reset();
+
+    if (breakId) {
+        // Mode edition
+        const brk = scheduleConfig.breaks.find(b => b.id === breakId);
+        if (!brk) return;
+
+        title.textContent = 'Modifier la pause';
+        deleteBtn.style.display = 'block';
+
+        document.getElementById('breakEditId').value = brk.id;
+        document.getElementById('breakEditName').value = brk.name;
+        document.getElementById('breakEditStart').value = brk.start;
+        document.getElementById('breakEditEnd').value = brk.end;
+        document.getElementById('breakEditActive').value = brk.active ? 'true' : 'false';
+
+        // Cocher les jours
+        document.querySelectorAll('#breakDaysCheckboxes input[name="breakDay"]').forEach(cb => {
+            cb.checked = brk.days.includes(cb.value);
+        });
+    } else {
+        // Mode ajout
+        title.textContent = 'Ajouter une pause';
+        deleteBtn.style.display = 'none';
+        document.getElementById('breakEditId').value = '';
+        document.getElementById('breakEditStart').value = '10:00';
+        document.getElementById('breakEditEnd').value = '10:15';
+
+        // Cocher tous les jours par defaut
+        document.querySelectorAll('#breakDaysCheckboxes input[name="breakDay"]').forEach(cb => {
+            cb.checked = true;
+        });
+    }
+
+    modal.style.display = 'flex';
+}
+
+/**
+ * Ferme le modal d'edition de pause
+ */
+function closeBreakEdit() {
+    document.getElementById('modalBreakEdit').style.display = 'none';
+}
+
+/**
+ * Sauvegarde la pause editee
+ */
+function saveBreakEdit() {
+    const breakId = document.getElementById('breakEditId').value;
+    const name = document.getElementById('breakEditName').value.trim();
+    const start = document.getElementById('breakEditStart').value;
+    const end = document.getElementById('breakEditEnd').value;
+    const active = document.getElementById('breakEditActive').value === 'true';
+
+    if (!name) {
+        Toast.error('Veuillez entrer un nom');
+        return;
+    }
+
+    if (!start || !end) {
+        Toast.error('Veuillez entrer les horaires');
+        return;
+    }
+
+    // Recuperer les jours selectionnes
+    const days = Array.from(document.querySelectorAll('#breakDaysCheckboxes input[name="breakDay"]:checked'))
+        .map(cb => cb.value);
+
+    if (days.length === 0) {
+        Toast.error('Selectionnez au moins un jour');
+        return;
+    }
+
+    if (breakId) {
+        // Mode edition
+        const index = scheduleConfig.breaks.findIndex(b => b.id === breakId);
+        if (index !== -1) {
+            scheduleConfig.breaks[index] = {
+                ...scheduleConfig.breaks[index],
+                name,
+                start,
+                end,
+                days,
+                active
+            };
+            Toast.success('Pause modifiee');
+        }
+    } else {
+        // Mode ajout
+        const newId = `break-${Date.now()}`;
+        scheduleConfig.breaks.push({
+            id: newId,
+            name,
+            start,
+            end,
+            days,
+            active
+        });
+        Toast.success('Pause ajoutee');
+    }
+
+    saveScheduleConfig();
+    reloadScheduleArrays();
+    closeBreakEdit();
+    renderScheduleManager();
+    refresh();
+}
+
+/**
+ * Supprime une pause
+ */
+function deleteBreak() {
+    const breakId = document.getElementById('breakEditId').value;
+    if (!breakId) return;
+
+    if (!confirm('Etes-vous sur de vouloir supprimer cette pause ?')) return;
+
+    const index = scheduleConfig.breaks.findIndex(b => b.id === breakId);
+    if (index !== -1) {
+        scheduleConfig.breaks.splice(index, 1);
+
+        saveScheduleConfig();
+        reloadScheduleArrays();
+        closeBreakEdit();
+        renderScheduleManager();
+        refresh();
+        Toast.success('Pause supprimee');
+    }
+}
+
+/**
+ * Toggle heures supplementaires
+ */
+function toggleOvertimeEnabled() {
+    scheduleConfig.overtime.enabled = document.getElementById('toggleOvertime').checked;
+    saveScheduleConfig();
+    reloadScheduleArrays();
+    renderScheduleManager();
+    refresh();
+}
+
+/**
+ * Reinitialise la configuration des horaires
+ */
+function resetScheduleConfig() {
+    if (!confirm('Etes-vous sur de vouloir reinitialiser les horaires ?\n\nCela restaurera les horaires par defaut.')) {
+        return;
+    }
+
+    localStorage.removeItem(SCHEDULE_STORAGE_KEY);
+    scheduleConfig = JSON.parse(JSON.stringify(SCHEDULE_DEFAULT_CONFIG));
+    reloadScheduleArrays();
+    checkAndUnassignOutOfScheduleOperations();
+    renderScheduleManager();
+    refresh();
+    Toast.success('Horaires reinitialises');
+}
+
+/**
+ * Exporte la configuration des horaires en fichier JSON
+ */
+function exportScheduleConfig() {
+    const dataStr = JSON.stringify(scheduleConfig, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'schedule_config.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    Toast.success('Configuration horaires exportee');
+}
+
+/**
+ * Initialise les event listeners du gestionnaire d'horaires
+ */
+function initScheduleManagerHandlers() {
+    // Bouton ouvrir
+    document.getElementById('btnManageSchedule')?.addEventListener('click', openScheduleManager);
+
+    // Boutons fermer modal principal
+    document.getElementById('btnCloseSchedule')?.addEventListener('click', closeScheduleManager);
+    document.getElementById('btnCloseScheduleBottom')?.addEventListener('click', closeScheduleManager);
+
+    // Boutons actions
+    document.getElementById('btnResetSchedule')?.addEventListener('click', resetScheduleConfig);
+    document.getElementById('btnExportSchedule')?.addEventListener('click', exportScheduleConfig);
+
+    // Boutons ajouter
+    document.getElementById('btnAddShift')?.addEventListener('click', () => openShiftEdit(null));
+    document.getElementById('btnAddBreak')?.addEventListener('click', () => openBreakEdit(null));
+
+    // Toggle overtime
+    document.getElementById('toggleOvertime')?.addEventListener('change', toggleOvertimeEnabled);
+
+    // Modal edition equipe
+    document.getElementById('btnCloseShiftEdit')?.addEventListener('click', closeShiftEdit);
+    document.getElementById('btnCancelShiftEdit')?.addEventListener('click', closeShiftEdit);
+    document.getElementById('btnDeleteShift')?.addEventListener('click', deleteShift);
+    document.getElementById('formShiftEdit')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveShiftEdit();
+    });
+
+    // Mise a jour dynamique des horaires quand on change les jours
+    document.getElementById('shiftDaysCheckboxes')?.addEventListener('change', () => {
+        const shiftId = document.getElementById('shiftEditId').value;
+        const shift = shiftId ? scheduleConfig.shifts.find(s => s.id === shiftId) : null;
+        updateShiftSchedulesDisplay(shift?.schedules || {});
+    });
+
+    // Modal edition pause
+    document.getElementById('btnCloseBreakEdit')?.addEventListener('click', closeBreakEdit);
+    document.getElementById('btnCancelBreakEdit')?.addEventListener('click', closeBreakEdit);
+    document.getElementById('btnDeleteBreak')?.addEventListener('click', deleteBreak);
+    document.getElementById('formBreakEdit')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveBreakEdit();
+    });
+
+    // Fermer modals en cliquant en dehors
+    document.getElementById('modalSchedule')?.addEventListener('click', (e) => {
+        if (e.target.id === 'modalSchedule') closeScheduleManager();
+    });
+
+    document.getElementById('modalShiftEdit')?.addEventListener('click', (e) => {
+        if (e.target.id === 'modalShiftEdit') closeShiftEdit();
+    });
+
+    document.getElementById('modalBreakEdit')?.addEventListener('click', (e) => {
+        if (e.target.id === 'modalBreakEdit') closeBreakEdit();
+    });
+}
+
+// Exposer les fonctions globalement pour le HTML
+window.openShiftEdit = openShiftEdit;
+window.closeShiftEdit = closeShiftEdit;
+window.openBreakEdit = openBreakEdit;
+window.closeBreakEdit = closeBreakEdit;

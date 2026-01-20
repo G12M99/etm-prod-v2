@@ -3470,8 +3470,8 @@ function renderSidebarVueJournee(searchQuery = '') {
                     <button class="btn btn-sm btn-primary" onclick="placerAutomatiquement('${cmd.id}')">
                         Placer automatiquement
                     </button>
-                    <button class="btn btn-sm btn-secondary" onclick="showCommandeDetails('${cmd.id}')">
-                        Détails
+                    <button class="btn btn-sm btn-secondary" onclick="openPlanifierSemiAutoModal('${cmd.id}', ${semaineSelectionnee}, ${anneeSelectionnee})">
+                        Planifier
                     </button>
                 </div>
             </div>
@@ -10365,3 +10365,709 @@ window.openShiftEdit = openShiftEdit;
 window.closeShiftEdit = closeShiftEdit;
 window.openBreakEdit = openBreakEdit;
 window.closeBreakEdit = closeBreakEdit;
+
+// ===================================
+// PLANIFIER SEMI-AUTO (VUE SEMAINE)
+// ===================================
+
+/**
+ * État global du modal planifier semi-auto
+ */
+let planifierSemiAutoState = {
+    commandeId: null,
+    commande: null,
+    targetWeek: null,
+    targetYear: null,
+    selectedMachines: {},  // { opIndex: machineName }
+    selectedDay: null,
+    selectedTime: null,
+    calculatedSlots: [],   // Résultat du calcul
+    timeSlots: []          // Créneaux horaires disponibles
+};
+
+/**
+ * Ouvre le modal de planification semi-automatique
+ * @param {string} commandeId - ID de la commande
+ * @param {number} targetWeek - Semaine cible
+ * @param {number} targetYear - Année cible
+ */
+function openPlanifierSemiAutoModal(commandeId, targetWeek, targetYear) {
+    const cmd = commandes.find(c => c.id === commandeId);
+    if (!cmd) {
+        Toast.error('Commande non trouvée');
+        return;
+    }
+
+    // Initialiser l'état
+    planifierSemiAutoState = {
+        commandeId: commandeId,
+        commande: cmd,
+        targetWeek: targetWeek,
+        targetYear: targetYear,
+        selectedMachines: {},
+        selectedDay: null,
+        selectedTime: null,
+        calculatedSlots: [],
+        timeSlots: generateTimeSlots()
+    };
+
+    // Initialiser le modal
+    initPlanifierModal(cmd, targetWeek, targetYear);
+
+    // Afficher le modal (étape 1)
+    document.getElementById('planifierStep1').classList.add('active');
+    document.getElementById('planifierStep2').classList.remove('active');
+    document.getElementById('modalPlanifierSemiAuto').classList.add('active');
+}
+
+/**
+ * Initialise le contenu du modal
+ */
+function initPlanifierModal(cmd, targetWeek, targetYear) {
+    // Titre
+    document.getElementById('planifierModalTitle').textContent = `Planifier ${cmd.id}`;
+
+    // Info client
+    document.getElementById('planifierClientInfo').innerHTML = `
+        <strong>Client:</strong> ${cmd.client} |
+        <strong>Livraison:</strong> ${formatDate(cmd.dateLivraison)}
+    `;
+
+    // Opérations à placer
+    renderPlanifierOperations(cmd);
+
+    // Jours de la semaine
+    renderPlanifierDayOptions(targetWeek, targetYear);
+
+    // Slider heure
+    initPlanifierTimeSlider();
+}
+
+/**
+ * Génère les créneaux horaires (pas de 30 min)
+ */
+function generateTimeSlots() {
+    const slots = [];
+    // De 07:00 à 18:00 par pas de 30 min
+    for (let h = 7; h <= 18; h++) {
+        for (let m = 0; m < 60; m += 30) {
+            if (h === 18 && m > 0) break;
+            const timeStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+            slots.push(timeStr);
+        }
+    }
+    return slots;
+}
+
+/**
+ * Affiche les opérations avec sélecteur de machine
+ */
+function renderPlanifierOperations(cmd) {
+    const container = document.getElementById('planifierOperationsList');
+    const opsAPlacer = cmd.operations.filter(op => !op.slots || op.slots.length === 0);
+
+    if (opsAPlacer.length === 0) {
+        container.innerHTML = '<p class="no-ops-message">Toutes les opérations sont déjà placées.</p>';
+        return;
+    }
+
+    let html = '';
+    opsAPlacer.forEach((op, index) => {
+        const opClass = op.type.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const machines = getMachinesForOperationType(op.type);
+        const duration = hasTimeOverride(op) ? op.dureeOverride : op.dureeTotal;
+
+        // Pré-sélectionner la première machine disponible
+        if (!planifierSemiAutoState.selectedMachines[index]) {
+            planifierSemiAutoState.selectedMachines[index] = machines[0];
+        }
+
+        html += `
+            <div class="planifier-operation-item ${opClass}" data-op-index="${index}">
+                <div class="planifier-op-info">
+                    <span class="planifier-op-type">${op.type}</span>
+                    <span class="planifier-op-duration">${formatHours(duration)}</span>
+                </div>
+                <div class="planifier-op-machine-select">
+                    <select id="planifierMachine_${index}" onchange="updatePlanifierMachineSelection(${index}, this.value)">
+                        ${machines.map(m => `<option value="${m}">${m}</option>`).join('')}
+                    </select>
+                    <div class="gauge-inline" id="planifierGauge_${index}">
+                        ${renderMachineGaugeInline(machines[0], planifierSemiAutoState.targetWeek, planifierSemiAutoState.targetYear)}
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+/**
+ * Retourne les machines disponibles pour un type d'opération
+ */
+function getMachinesForOperationType(opType) {
+    const type = opType.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+    if (type === 'cisaillage') {
+        return machinesConfig.cisaillage.filter(m => m.active).map(m => m.name);
+    } else if (type === 'poinconnage') {
+        return machinesConfig.poinconnage.filter(m => m.active).map(m => m.name);
+    } else if (type === 'pliage') {
+        return machinesConfig.pliage.filter(m => m.active).map(m => m.name);
+    }
+    return [];
+}
+
+/**
+ * Rendu de la jauge de charge inline
+ */
+function renderMachineGaugeInline(machineName, week, year) {
+    const capacity = calculerCapaciteMachine(machineName, week, year);
+    const capacityClass = getCapacityColorClass(capacity.pourcentage);
+
+    return `
+        <div class="gauge-bar-inline">
+            <div class="gauge-fill-inline ${capacityClass}" style="width: ${Math.min(100, capacity.pourcentage)}%"></div>
+        </div>
+        <span class="gauge-label-inline">${capacity.pourcentage}%</span>
+    `;
+}
+
+/**
+ * Met à jour la sélection de machine pour une opération
+ */
+function updatePlanifierMachineSelection(opIndex, machineName) {
+    planifierSemiAutoState.selectedMachines[opIndex] = machineName;
+
+    // Mettre à jour la jauge
+    const gaugeContainer = document.getElementById(`planifierGauge_${opIndex}`);
+    if (gaugeContainer) {
+        gaugeContainer.innerHTML = renderMachineGaugeInline(
+            machineName,
+            planifierSemiAutoState.targetWeek,
+            planifierSemiAutoState.targetYear
+        );
+    }
+}
+
+/**
+ * Affiche les options de jours pour la semaine cible
+ */
+function renderPlanifierDayOptions(week, year) {
+    const select = document.getElementById('planifierDaySelect');
+    const weekDates = getWeekDates(week, year);
+
+    let html = '';
+    DAYS_OF_WEEK.forEach((day, index) => {
+        const date = weekDates[index];
+        const dateStr = date ? `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}` : '';
+        html += `<option value="${index}">${day} ${dateStr}</option>`;
+    });
+
+    select.innerHTML = html;
+    select.value = '0'; // Lundi par défaut
+    planifierSemiAutoState.selectedDay = 0;
+
+    select.addEventListener('change', (e) => {
+        planifierSemiAutoState.selectedDay = parseInt(e.target.value);
+        updateTimeSliderForDay();
+    });
+}
+
+/**
+ * Retourne les dates de la semaine
+ */
+function getWeekDates(week, year) {
+    const dates = [];
+    const simple = new Date(year, 0, 1 + (week - 1) * 7);
+    const dow = simple.getDay();
+    const ISOweekStart = new Date(simple);
+
+    if (dow <= 4)
+        ISOweekStart.setDate(simple.getDate() - simple.getDay() + 1);
+    else
+        ISOweekStart.setDate(simple.getDate() + 8 - simple.getDay());
+
+    for (let i = 0; i < 5; i++) {
+        const d = new Date(ISOweekStart);
+        d.setDate(ISOweekStart.getDate() + i);
+        dates.push(d);
+    }
+    return dates;
+}
+
+/**
+ * Initialise le slider d'heure
+ */
+function initPlanifierTimeSlider() {
+    const slider = document.getElementById('planifierTimeSlider');
+    const display = document.getElementById('planifierTimeDisplay');
+
+    // Configurer le slider selon le jour (Vendredi a des horaires différents)
+    updateTimeSliderForDay();
+
+    slider.addEventListener('input', (e) => {
+        const index = parseInt(e.target.value);
+        const time = planifierSemiAutoState.timeSlots[index] || '07:30';
+        display.textContent = time;
+        planifierSemiAutoState.selectedTime = time;
+    });
+
+    // Valeur initiale
+    slider.value = 1; // 07:30 par défaut
+    display.textContent = planifierSemiAutoState.timeSlots[1] || '07:30';
+    planifierSemiAutoState.selectedTime = planifierSemiAutoState.timeSlots[1] || '07:30';
+}
+
+/**
+ * Met à jour le slider selon le jour sélectionné
+ */
+function updateTimeSliderForDay() {
+    const slider = document.getElementById('planifierTimeSlider');
+    const dayIndex = planifierSemiAutoState.selectedDay;
+    const dayName = DAYS_OF_WEEK[dayIndex];
+
+    // Générer les créneaux selon le jour
+    let slots = [];
+    if (dayName === 'Vendredi') {
+        // Vendredi: 07:00 - 14:00 (avec heures sup)
+        for (let h = 7; h <= 14; h++) {
+            for (let m = 0; m < 60; m += 30) {
+                if (h === 14 && m > 0) break;
+                slots.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
+            }
+        }
+    } else {
+        // Lundi-Jeudi: 07:30 - 18:00 (avec heures sup)
+        for (let h = 7; h <= 18; h++) {
+            for (let m = 0; m < 60; m += 30) {
+                if (h === 7 && m === 0) continue; // Pas de 07:00 sauf vendredi
+                if (h === 18 && m > 0) break;
+                slots.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
+            }
+        }
+    }
+
+    planifierSemiAutoState.timeSlots = slots;
+    slider.max = slots.length - 1;
+    slider.value = 0;
+
+    const display = document.getElementById('planifierTimeDisplay');
+    display.textContent = slots[0];
+    planifierSemiAutoState.selectedTime = slots[0];
+}
+
+/**
+ * Calcule le placement semi-automatique
+ */
+function calculerPlacementSemiAuto() {
+    const state = planifierSemiAutoState;
+    const cmd = state.commande;
+
+    if (!cmd) {
+        Toast.error('Erreur: commande non trouvée');
+        return;
+    }
+
+    const opsAPlacer = cmd.operations.filter(op => !op.slots || op.slots.length === 0);
+
+    if (opsAPlacer.length === 0) {
+        Toast.warning('Aucune opération à placer');
+        return;
+    }
+
+    // Construire la contrainte de départ
+    const startDay = DAYS_OF_WEEK[state.selectedDay];
+    const startTime = state.selectedTime;
+    const startWeek = state.targetWeek;
+    const startYear = state.targetYear;
+
+    const calculatedSlots = [];
+    let currentConstraint = {
+        week: startWeek,
+        year: startYear,
+        dayIndex: state.selectedDay,
+        timeStr: startTime
+    };
+
+    // Pour chaque opération, trouver le créneau
+    for (let i = 0; i < opsAPlacer.length; i++) {
+        const op = opsAPlacer[i];
+        const selectedMachine = state.selectedMachines[i];
+        const duration = hasTimeOverride(op) ? op.dureeOverride : op.dureeTotal;
+
+        // Trouver les créneaux pour cette opération
+        const slotsForOp = findSlotsForOperationSemiAuto(
+            op,
+            selectedMachine,
+            duration,
+            currentConstraint,
+            cmd
+        );
+
+        if (!slotsForOp || slotsForOp.length === 0) {
+            Toast.error(`Impossible de placer ${op.type}: aucun créneau disponible`);
+            return;
+        }
+
+        calculatedSlots.push({
+            operation: op,
+            opIndex: cmd.operations.indexOf(op),
+            machine: selectedMachine,
+            slots: slotsForOp,
+            duration: duration
+        });
+
+        // Mettre à jour la contrainte pour l'opération suivante
+        const lastSlot = slotsForOp[slotsForOp.length - 1];
+        currentConstraint = {
+            week: lastSlot.semaine,
+            year: lastSlot.year || startYear,
+            dayIndex: DAYS_OF_WEEK.indexOf(lastSlot.jour),
+            timeStr: lastSlot.heureFin
+        };
+
+        // Si on dépasse la journée, passer au jour suivant
+        if (timeToDecimalHours(lastSlot.heureFin) >= getEndOfDayHour(lastSlot.jour)) {
+            const next = getNextWorkDay(lastSlot.jour, lastSlot.semaine, currentConstraint.year);
+            currentConstraint = {
+                week: next.week,
+                year: next.year,
+                dayIndex: DAYS_OF_WEEK.indexOf(next.day),
+                timeStr: getDayStartTime(next.day)
+            };
+        }
+    }
+
+    // Stocker le résultat et afficher le récapitulatif
+    state.calculatedSlots = calculatedSlots;
+    showPlanifierRecap(calculatedSlots, cmd);
+}
+
+/**
+ * Retourne l'heure de fin de journée selon le jour
+ */
+function getEndOfDayHour(dayName) {
+    if (dayName === 'Vendredi') return 12;
+    return 16.5;
+}
+
+/**
+ * Retourne l'heure de début de journée selon le jour
+ */
+function getDayStartTime(dayName) {
+    if (dayName === 'Vendredi') return '07:00';
+    return '07:30';
+}
+
+/**
+ * Trouve les créneaux pour une opération (peut être multi-jours)
+ */
+function findSlotsForOperationSemiAuto(operation, machine, duration, constraint, cmd) {
+    const slots = [];
+    let remainingDuration = duration;
+    let currentWeek = constraint.week;
+    let currentYear = constraint.year;
+    let currentDayIndex = constraint.dayIndex;
+    let currentTimeStr = constraint.timeStr;
+
+    const maxIterations = 20; // Sécurité anti-boucle infinie
+    let iterations = 0;
+
+    while (remainingDuration > 0.01 && iterations < maxIterations) {
+        iterations++;
+        const dayName = DAYS_OF_WEEK[currentDayIndex];
+
+        // Trouver le prochain gap disponible
+        const gap = findNextGap(machine, dayName, currentWeek, currentTimeStr, currentYear);
+
+        if (!gap) {
+            // Pas de gap ce jour, passer au suivant
+            const next = getNextWorkDay(dayName, currentWeek, currentYear);
+            currentWeek = next.week;
+            currentYear = next.year;
+            currentDayIndex = DAYS_OF_WEEK.indexOf(next.day);
+            currentTimeStr = getDayStartTime(next.day);
+            continue;
+        }
+
+        // Calculer combien on peut placer
+        const usableDuration = Math.min(gap.duration || 0, remainingDuration);
+
+        if (usableDuration < 0.1 || isNaN(usableDuration)) {
+            // Gap trop petit ou invalide, chercher le suivant
+            const endTime = addHoursToTime(gap.startTime, gap.duration || 0);
+            currentTimeStr = endTime;
+            continue;
+        }
+
+        // Créer le slot
+        const endTime = addHoursToTime(gap.startTime, usableDuration);
+        const dateDebut = getDateFromWeekDayTime(currentWeek, dayName, gap.startTime, currentYear);
+        const dateFin = getDateFromWeekDayTime(currentWeek, dayName, endTime, currentYear);
+
+        slots.push({
+            machine: machine,
+            jour: dayName,
+            semaine: currentWeek,
+            year: currentYear,
+            heureDebut: gap.startTime,
+            heureFin: endTime,
+            dateDebut: dateDebut.toISOString().split('.')[0],
+            dateFin: dateFin.toISOString().split('.')[0],
+            duree: usableDuration
+        });
+
+        remainingDuration -= usableDuration;
+
+        // Mettre à jour pour la prochaine itération
+        if (remainingDuration > 0.01) {
+            // Vérifier si on est en fin de journée
+            if (timeToDecimalHours(endTime) >= getEndOfDayHour(dayName)) {
+                const next = getNextWorkDay(dayName, currentWeek, currentYear);
+                currentWeek = next.week;
+                currentYear = next.year;
+                currentDayIndex = DAYS_OF_WEEK.indexOf(next.day);
+                currentTimeStr = getDayStartTime(next.day);
+            } else {
+                currentTimeStr = endTime;
+            }
+        }
+    }
+
+    return slots.length > 0 ? slots : null;
+}
+
+/**
+ * Ajoute des heures à une heure au format HH:MM
+ */
+function addHoursToTime(timeStr, hours) {
+    const [h, m] = timeStr.split(':').map(Number);
+    const totalMinutes = h * 60 + m + Math.round(hours * 60);
+    const newH = Math.floor(totalMinutes / 60);
+    const newM = totalMinutes % 60;
+    return `${newH.toString().padStart(2, '0')}:${newM.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Crée une date à partir de semaine/jour/heure
+ */
+function getDateFromWeekDayTime(week, dayName, timeStr, year) {
+    const date = getDateFromWeekDay(week, dayName, timeStr);
+    // S'assurer que l'année est correcte
+    if (year && date.getFullYear() !== year) {
+        date.setFullYear(year);
+    }
+    return date;
+}
+
+/**
+ * Affiche le récapitulatif (étape 2)
+ */
+function showPlanifierRecap(calculatedSlots, cmd) {
+    const recapList = document.getElementById('planifierRecapList');
+    const warningDiv = document.getElementById('planifierWarningLivraison');
+
+    // Vérifier dépassement date livraison
+    let lastEndDate = null;
+    calculatedSlots.forEach(item => {
+        item.slots.forEach(slot => {
+            const endDate = new Date(slot.dateFin);
+            if (!lastEndDate || endDate > lastEndDate) {
+                lastEndDate = endDate;
+            }
+        });
+    });
+
+    const livraisonDate = new Date(cmd.dateLivraison);
+    if (lastEndDate && lastEndDate > livraisonDate) {
+        warningDiv.innerHTML = `⚠️ Attention: Le placement se termine le ${formatDateFr(lastEndDate)}, après la date de livraison (${formatDate(cmd.dateLivraison)})`;
+        warningDiv.classList.add('visible');
+    } else {
+        warningDiv.classList.remove('visible');
+    }
+
+    // Construire le récapitulatif
+    let html = '';
+    calculatedSlots.forEach(item => {
+        const opClass = item.operation.type.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+        html += `<div class="recap-item ${opClass}">`;
+        html += `<div class="recap-item-header">${item.operation.type}: ${item.machine}</div>`;
+        html += `<div class="recap-item-details">${formatHours(item.duration)}</div>`;
+
+        item.slots.forEach(slot => {
+            const dayDate = formatDayDate(slot.jour, slot.semaine, slot.year);
+            html += `<div class="recap-item-slot">${dayDate} de ${slot.heureDebut} à ${slot.heureFin}</div>`;
+        });
+
+        html += '</div>';
+    });
+
+    recapList.innerHTML = html;
+
+    // Passer à l'étape 2
+    document.getElementById('planifierStep1').classList.remove('active');
+    document.getElementById('planifierStep2').classList.add('active');
+}
+
+/**
+ * Formate jour + date
+ */
+function formatDayDate(jour, semaine, year) {
+    const dates = getWeekDates(semaine, year || anneeSelectionnee);
+    const dayIndex = DAYS_OF_WEEK.indexOf(jour);
+    const date = dates[dayIndex];
+    if (date) {
+        return `${jour} ${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+    }
+    return jour;
+}
+
+/**
+ * Formate une date en français
+ */
+function formatDateFr(date) {
+    return date.toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+/**
+ * Confirme et applique le placement
+ */
+function confirmerPlacementSemiAuto() {
+    const state = planifierSemiAutoState;
+
+    if (!state.calculatedSlots || state.calculatedSlots.length === 0) {
+        Toast.error('Aucun placement à confirmer');
+        return;
+    }
+
+    const cmd = commandes.find(c => c.id === state.commandeId);
+    if (!cmd) {
+        Toast.error('Commande non trouvée');
+        return;
+    }
+
+    const cmdId = cmd.id;
+
+    // Copier les slots calculés AVANT de fermer le modal (qui reset l'état)
+    const slotsToApply = [...state.calculatedSlots];
+
+    // Fermer le modal
+    closePlanifierModal();
+
+    // Appliquer les slots calculés
+    slotsToApply.forEach(item => {
+        const operation = cmd.operations[item.opIndex];
+        if (operation) {
+            if (!operation.slots) {
+                operation.slots = [];
+            }
+            item.slots.forEach(slot => {
+                // S'assurer que duree est un nombre valide
+                const duree = typeof slot.duree === 'number' && !isNaN(slot.duree) ? slot.duree : 0;
+                operation.slots.push({
+                    machine: slot.machine,
+                    duree: duree,
+                    jour: slot.jour,
+                    semaine: slot.semaine,
+                    heureDebut: slot.heureDebut,
+                    heureFin: slot.heureFin,
+                    dateDebut: slot.dateDebut,
+                    dateFin: slot.dateFin
+                });
+            });
+            // Mettre à jour le statut de l'opération
+            operation.statut = "Planifiée";
+        }
+    });
+
+    // Mettre à jour le statut de la commande
+    const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
+    if (allPlaced) {
+        cmd.statut = "Planifiée";
+    } else {
+        cmd.statut = "En cours";
+    }
+
+    // Sauvegarder l'état pour undo
+    if (typeof historyManager !== 'undefined') {
+        historyManager.saveState(`Planifier semi-auto ${cmdId}`);
+    }
+
+    // Sauvegarder et rafraîchir
+    if (typeof syncManager !== 'undefined') {
+        syncManager.saveLocalData();
+    }
+    refresh();
+    Toast.success(`${cmdId} planifié avec succès`);
+}
+
+/**
+ * Retour à l'étape 1
+ */
+function backToPlanifierStep1() {
+    document.getElementById('planifierStep2').classList.remove('active');
+    document.getElementById('planifierStep1').classList.add('active');
+}
+
+/**
+ * Ferme le modal sans action
+ */
+function closePlanifierModal() {
+    document.getElementById('modalPlanifierSemiAuto').classList.remove('active');
+
+    // Réinitialiser l'état
+    planifierSemiAutoState = {
+        commandeId: null,
+        commande: null,
+        targetWeek: null,
+        targetYear: null,
+        selectedMachines: {},
+        selectedDay: null,
+        selectedTime: null,
+        calculatedSlots: [],
+        timeSlots: []
+    };
+}
+
+/**
+ * Initialise les event listeners du modal planifier
+ */
+function initPlanifierSemiAutoHandlers() {
+    // Boutons fermer
+    document.getElementById('btnClosePlanifier')?.addEventListener('click', closePlanifierModal);
+    document.getElementById('btnClosePlanifierStep2')?.addEventListener('click', closePlanifierModal);
+    document.getElementById('btnCancelPlanifier')?.addEventListener('click', closePlanifierModal);
+
+    // Bouton calculer
+    document.getElementById('btnCalculerPlacement')?.addEventListener('click', calculerPlacementSemiAuto);
+
+    // Boutons étape 2
+    document.getElementById('btnBackToStep1')?.addEventListener('click', backToPlanifierStep1);
+    document.getElementById('btnConfirmerPlacement')?.addEventListener('click', confirmerPlacementSemiAuto);
+
+    // Fermer en cliquant en dehors
+    document.getElementById('modalPlanifierSemiAuto')?.addEventListener('click', (e) => {
+        if (e.target.id === 'modalPlanifierSemiAuto') {
+            closePlanifierModal();
+        }
+    });
+}
+
+// Exposer les fonctions globalement pour le HTML
+window.openPlanifierSemiAutoModal = openPlanifierSemiAutoModal;
+window.updatePlanifierMachineSelection = updatePlanifierMachineSelection;
+window.closePlanifierModal = closePlanifierModal;
+
+// Initialiser les handlers au chargement
+document.addEventListener('DOMContentLoaded', () => {
+    initPlanifierSemiAutoHandlers();
+});

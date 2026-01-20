@@ -380,6 +380,62 @@
         </div>
     </div>
 
+    <!-- Modal: Planifier Semi-Auto (Vue Semaine) -->
+    <div class="modal" id="modalPlanifierSemiAuto">
+        <div class="modal-content modal-planifier-content">
+            <!-- Étape 1: Configuration -->
+            <div id="planifierStep1" class="planifier-step active">
+                <div class="modal-header">
+                    <h2 class="modal-title" id="planifierModalTitle">Planifier CC25-XXXX</h2>
+                    <button class="btn-close" id="btnClosePlanifier">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="planifierClientInfo" class="planifier-client-info"></div>
+
+                    <h3 class="planifier-section-title">Opérations à planifier</h3>
+                    <div id="planifierOperationsList" class="planifier-operations-list"></div>
+
+                    <h3 class="planifier-section-title">Date et heure de début</h3>
+                    <div id="planifierDateTimeSection" class="planifier-datetime-section">
+                        <div class="planifier-day-select-wrapper">
+                            <label for="planifierDaySelect">Jour</label>
+                            <select id="planifierDaySelect" class="planifier-day-select"></select>
+                        </div>
+                        <div class="planifier-time-slider-wrapper">
+                            <label>Heure de début</label>
+                            <div class="time-slider-container">
+                                <input type="range" id="planifierTimeSlider" min="0" max="18" value="0" class="planifier-time-slider">
+                                <span id="planifierTimeDisplay" class="planifier-time-display">07:30</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnCancelPlanifier">Annuler</button>
+                        <button class="btn btn-primary" id="btnCalculerPlacement">Calculer le placement</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Étape 2: Récapitulatif -->
+            <div id="planifierStep2" class="planifier-step">
+                <div class="modal-header">
+                    <h2 class="modal-title">Récapitulatif du placement</h2>
+                    <button class="btn-close" id="btnClosePlanifierStep2">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="planifierWarningLivraison" class="planifier-warning-livraison"></div>
+                    <div id="planifierRecapList" class="planifier-recap-list"></div>
+
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnBackToStep1">Modifier</button>
+                        <button class="btn btn-primary" id="btnConfirmerPlacement">Confirmer</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal: System Events (Maintenance/Closures) -->
     <div class="modal" id="modalSystemEvents">
         <div class="modal-content" style="max-width: 800px;">

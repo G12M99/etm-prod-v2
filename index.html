@@ -72,19 +72,30 @@
                                                         Nettoyer commandes archivées
                                                     </button>
                                                     <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
-                                                    <button id="btnManageMachines" title="Gérer les machines (ajout/modification/suppression)">
-                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                                            <path d="M13.5 8.5a.5.5 0 01.5.5v4.5a1 1 0 01-1 1H3a1 1 0 01-1-1V9a.5.5 0 011 0v4.5h10V9a.5.5 0 01.5-.5zM8 1a3 3 0 013 3v1h1.5a.5.5 0 01.5.5v2a.5.5 0 01-1 0V6H4v1.5a.5.5 0 01-1 0v-2A.5.5 0 013.5 5H5V4a3 3 0 013-3zm2 4V4a2 2 0 10-4 0v1h4z" fill="currentColor"/>
-                                                        </svg>
-                                                        Gérer les machines
-                                                    </button>
-                                                    <button id="btnManageSchedule" title="Gérer les horaires de production">
-                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                                            <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
-                                                            <path d="M8 4v4.5l3 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                                                        </svg>
-                                                        Gérer les horaires
-                                                    </button>
+                                                    <div class="dropdown-submenu">
+                                                        <button class="dropdown-submenu-toggle">
+                                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                                <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 01-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 01.872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 012.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 012.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 01.872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 01-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 01-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 110-5.858 2.929 2.929 0 010 5.858z" fill="currentColor"/>
+                                                            </svg>
+                                                            Parametres
+                                                            <span class="submenu-arrow">&#9654;</span>
+                                                        </button>
+                                                        <div class="dropdown-submenu-content">
+                                                            <button id="btnManageMachines" title="Gerer les machines (ajout/modification/suppression)">
+                                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                                    <path d="M13.5 8.5a.5.5 0 01.5.5v4.5a1 1 0 01-1 1H3a1 1 0 01-1-1V9a.5.5 0 011 0v4.5h10V9a.5.5 0 01.5-.5zM8 1a3 3 0 013 3v1h1.5a.5.5 0 01.5.5v2a.5.5 0 01-1 0V6H4v1.5a.5.5 0 01-1 0v-2A.5.5 0 013.5 5H5V4a3 3 0 013-3zm2 4V4a2 2 0 10-4 0v1h4z" fill="currentColor"/>
+                                                                </svg>
+                                                                Machines
+                                                            </button>
+                                                            <button id="btnManageSchedule" title="Gerer les equipes et horaires de production">
+                                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                                    <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+                                                                    <path d="M8 4v4.5l3 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                                                </svg>
+                                                                Equipes & Horaires
+                                                            </button>
+                                                        </div>
+                                                    </div>
                                                     <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
                                                     <div id="storageIndicator" style="padding: 6px 10px; font-size: 12px; color: var(--color-text-muted); display: flex; align-items: center; gap: 6px;">
                                                         <span id="storageText">-- KB / 5 MB</span>

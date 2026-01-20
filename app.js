@@ -2874,10 +2874,12 @@ function renderVueJournee() {
             const monthNum = (dateObj.getMonth() + 1).toString().padStart(2, '0');
             const formattedDate = `${dayNum}/${monthNum}`;
 
-            // Timeline hours: dynamique basé sur SCHEDULE_CONFIG
-            const daySchedule = getScheduleForDay(day);
-            const startHourTimeline = daySchedule.start;
-            const endHourTimeline = daySchedule.overtimeEnd;
+            // Timeline hours: dynamique basé sur SCHEDULE_CONFIG (multi-equipes)
+            const globalSchedule = getGlobalScheduleRangeForDay(day);
+            const startHourTimeline = globalSchedule.globalStart;
+            const endHourTimeline = globalSchedule.globalEnd;
+            const interShiftGaps = globalSchedule.gaps;
+            const daySchedule = getScheduleForDay(day); // Pour compatibilite avec le code existant
 
             html += `
                 <div class="day-cell ${day === 'Vendredi' ? 'friday' : ''} ${getMachineTypeClass(machine)}"
@@ -2943,8 +2945,8 @@ function renderVueJournee() {
             // Create hourly time grid (background)
             html += '<div class="time-grid">';
             
-            // Generate time slots based on day (30 min intervals) - dynamique
-            for (let h = daySchedule.start; h < daySchedule.overtimeEnd; h += 0.5) {
+            // Generate time slots based on day (30 min intervals) - dynamique multi-equipes
+            for (let h = startHourTimeline; h < endHourTimeline; h += 0.5) {
                 const hour = Math.floor(h);
                 const minute = (h % 1 === 0.5) ? '30' : '00';
                 const timeSlot = `${hour.toString().padStart(2, '0')}:${minute}`;
@@ -3006,10 +3008,31 @@ function renderVueJournee() {
                 html += `<div class="lunch-break" style="top: ${topLunch}px; height: ${heightLunch}px;"></div>`;
             }
 
-            // 2. Add Overtime Separator - dynamique basé sur SCHEDULE_CONFIG
-            const separatorTime = daySchedule.standardEnd;
-            const separatorTop = (separatorTime - startHourTimeline) * 60;
-            html += `<div class="overtime-separator" style="top: ${separatorTop}px;"></div>`;
+            // 1b. Add inter-shift gaps visual (zones between shifts)
+            interShiftGaps.forEach(gap => {
+                const topGap = (gap.start - startHourTimeline) * 60;
+                const heightGap = (gap.end - gap.start) * 60;
+                html += `<div class="inter-shift-gap" style="top: ${topGap}px; height: ${heightGap}px;"
+                         title="Hors horaires (${decimalToTimeString(gap.start)} - ${decimalToTimeString(gap.end)})"></div>`;
+            });
+
+            // 2. Add Overtime Separator - dynamique basé sur SCHEDULE_CONFIG (multi-equipes)
+            globalSchedule.shifts.forEach(shift => {
+                // Recuperer la fin normale (sans heures sup) pour cette equipe
+                const shiftConfig = scheduleConfig.shifts ? scheduleConfig.shifts.find(s => s.id === shift.shiftId) : null;
+                if (shiftConfig && shiftConfig.schedules && shiftConfig.schedules[day]) {
+                    const normalEnd = timeStringToDecimal(shiftConfig.schedules[day].end);
+                    const separatorTop = (normalEnd - startHourTimeline) * 60;
+                    html += `<div class="overtime-separator" style="top: ${separatorTop}px;"
+                             title="Fin ${shift.shiftName}"></div>`;
+                }
+            });
+            // Fallback si pas de config shifts (ancien systeme)
+            if (!scheduleConfig.shifts || scheduleConfig.shifts.length === 0) {
+                const separatorTime = daySchedule.standardEnd;
+                const separatorTop = (separatorTime - startHourTimeline) * 60;
+                html += `<div class="overtime-separator" style="top: ${separatorTop}px;"></div>`;
+            }
 
             // 🔴 Add Current Time Line (Red Line)
             // Check if this column represents "Today"
@@ -6828,6 +6851,54 @@ function getScheduleForDay(dayName) {
         return SCHEDULE_CONFIG.FRIDAY;
     }
     return SCHEDULE_CONFIG.MONDAY_TO_THURSDAY;
+}
+
+/**
+ * Retourne la plage horaire globale pour un jour (toutes equipes confondues)
+ * @param {string} dayName - Jour de la semaine
+ * @returns {object} { globalStart, globalEnd, shifts: [{shiftId, shiftName, start, end}], gaps: [{start, end}] }
+ */
+function getGlobalScheduleRangeForDay(dayName) {
+    const ranges = getAvailableRangesForDay(dayName);
+    if (!ranges || ranges.length === 0) {
+        // Fallback sur getScheduleForDay
+        const fallback = getScheduleForDay(dayName);
+        return {
+            globalStart: fallback.start,
+            globalEnd: fallback.overtimeEnd,
+            shifts: [{ shiftId: 'default', shiftName: 'Equipe Jour', start: fallback.start, end: fallback.overtimeEnd }],
+            gaps: []
+        };
+    }
+
+    // Trier les equipes par heure de debut
+    ranges.sort((a, b) => a.start - b.start);
+
+    const globalStart = Math.min(...ranges.map(r => r.start));
+    let globalEnd = Math.max(...ranges.map(r => r.end));
+
+    // Verifier si heures sup actives et etendre globalEnd
+    if (scheduleConfig.overtime && scheduleConfig.overtime.enabled && scheduleConfig.overtime.slots) {
+        const overtimeSlot = scheduleConfig.overtime.slots.find(s => s.days && s.days.includes(dayName));
+        if (overtimeSlot) {
+            const overtimeEnd = timeStringToDecimal(overtimeSlot.end);
+            if (overtimeEnd > globalEnd) {
+                globalEnd = overtimeEnd;
+            }
+        }
+    }
+
+    // Detecter les gaps entre equipes
+    const gaps = [];
+    for (let i = 0; i < ranges.length - 1; i++) {
+        const currentEnd = ranges[i].end;
+        const nextStart = ranges[i + 1].start;
+        if (nextStart > currentEnd) {
+            gaps.push({ start: currentEnd, end: nextStart });
+        }
+    }
+
+    return { globalStart, globalEnd, shifts: ranges, gaps };
 }
 
 /**

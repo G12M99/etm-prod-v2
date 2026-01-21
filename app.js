@@ -2371,39 +2371,40 @@ window.resetAndCloseModalTimeEdit = resetAndCloseModalTimeEdit;
 // et Poinçonnage doit SE TERMINER avant Pliage
 
 /**
- * 🔒 RÈGLE CRITIQUE: Valide l'ordre strict des opérations
+ * 🔒 RÈGLE: Valide l'ordre des opérations
+ * Cisaillage doit être avant Poinçonnage et Pliage
+ * Poinçonnage et Pliage peuvent se chevaucher (ordre flexible entre eux)
  * @param {Object} commande - La commande à valider
  * @returns {Object} { valid: boolean, message: string }
  */
 function validateOperationOrder(commande) {
     const operations = commande.operations;
+    if (!operations || operations.length === 0) return { valid: true, message: '' };
 
-    // Define canonical order priority
-    const priority = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
+    // Trouver l'index de Cisaillage s'il existe
+    const cisaillageIndex = operations.findIndex(op => op.type === 'Cisaillage');
 
-    // Check if operations are sorted by priority
-    for (let i = 0; i < operations.length - 1; i++) {
-        const currentOp = operations[i];
-        const nextOp = operations[i + 1];
-        
-        const currentP = priority[currentOp.type] || 0;
-        const nextP = priority[nextOp.type] || 0;
-
-        if (currentP >= nextP) {
-             return {
-                valid: false,
-                message: `⛔ ORDRE DE PRODUCTION INVALIDE\n\nL'opération "${currentOp.type}" ne peut pas être après ou au même niveau que "${nextOp.type}".\n\nOrdre requis: Cisaillage → Poinçonnage → Pliage`
-            };
+    if (cisaillageIndex !== -1) {
+        // Vérifier qu'aucune opération Poinçonnage ou Pliage n'est avant Cisaillage
+        for (let i = 0; i < cisaillageIndex; i++) {
+            const op = operations[i];
+            if (op.type === 'Poinçonnage' || op.type === 'Pliage') {
+                return {
+                    valid: false,
+                    message: `⛔ ORDRE DE PRODUCTION INVALIDE\n\n"${op.type}" ne peut pas être avant "Cisaillage".\n\nCisaillage doit toujours être la première opération.`
+                };
+            }
         }
     }
 
+    // Poinçonnage et Pliage peuvent être dans n'importe quel ordre entre eux
     return { valid: true, message: '' };
 }
 
 /**
- * 🔒 RÈGLE CRITIQUE: Vérifie si une opération peut être placée à une date donnée
- * L'ordre CHRONOLOGIQUE doit être respecté: Cisaillage → Poinçonnage → Pliage
- * Mais on peut placer les opérations dans n'importe quel ordre (ex: placer Pliage avant Cisaillage)
+ * 🔒 RÈGLE: Vérifie si une opération peut être placée à une date donnée
+ * Cisaillage doit SE TERMINER avant Poinçonnage et Pliage
+ * Poinçonnage et Pliage peuvent se chevaucher (parallèle autorisé)
  * @param {Object} commande - La commande
  * @param {Object} operation - L'opération à placer
  * @param {number} targetWeek - Semaine cible
@@ -2413,21 +2414,13 @@ function validateOperationOrder(commande) {
  */
 function canPlaceOperation(commande, operation, targetWeek, targetDay, targetStartTime = '09:00', targetYear = anneeSelectionnee) {
     const operations = commande.operations;
+    const currentType = operation.type;
 
-    // Define canonical order priority
-    const priority = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
-
-    // Create a sorted list of operations present in this command
-    // This ensures we always check against the correct logical predecessor/successor
-    const sortedOps = [...operations].sort((a, b) => {
-        return (priority[a.type] || 99) - (priority[b.type] || 99);
-    });
-
-    const operationIndex = sortedOps.indexOf(operation);
-
-    if (operationIndex === -1) {
-        return { valid: false, message: 'Opération non trouvée dans la commande' };
-    }
+    // Helper: Vérifie si deux opérations peuvent se chevaucher (parallèle autorisé)
+    const isParallelAllowed = (type1, type2) => {
+        return (type1 === 'Poinçonnage' || type1 === 'Pliage') &&
+               (type2 === 'Poinçonnage' || type2 === 'Pliage');
+    };
 
     // Calculer la date de début cible AVEC L'ANNÉE CIBLE
     const targetStartDate = getDateFromWeekDay(targetWeek, targetDay, targetStartTime, targetYear);
@@ -2436,82 +2429,80 @@ function canPlaceOperation(commande, operation, targetWeek, targetDay, targetSta
     const targetEndDate = new Date(targetStartDate);
     targetEndDate.setHours(targetEndDate.getHours() + operation.dureeTotal);
 
-    // 🔒 RÈGLE 1: Si l'opération PRÉCÉDENTE est placée, elle doit SE TERMINER AVANT le début de celle-ci
-    if (operationIndex > 0) {
-        const previousOp = sortedOps[operationIndex - 1]; // Use sorted list
+    // 🔒 RÈGLE 1: Si Cisaillage est placé et on place Poinçonnage/Pliage, Cisaillage doit être terminé
+    if (currentType === 'Poinçonnage' || currentType === 'Pliage') {
+        const cisaillageOp = operations.find(op => op.type === 'Cisaillage');
 
-        if (previousOp.slots && previousOp.slots.length > 0) {
-            // Trouver la date de fin de la dernière slot de l'opération précédente
-            // We need the absolute latest end time across all slots
-            const previousLastSlot = [...previousOp.slots].sort((a,b) => {
-                 if (a.semaine !== b.semaine) return a.semaine - b.semaine;
-                 const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
-                 if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
-                 return a.heureFin.localeCompare(b.heureFin);
+        if (cisaillageOp && cisaillageOp.slots && cisaillageOp.slots.length > 0) {
+            // Trouver la date de fin de Cisaillage
+            const cisaillageLastSlot = [...cisaillageOp.slots].sort((a,b) => {
+                if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+                const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+                if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+                return a.heureFin.localeCompare(b.heureFin);
             }).pop();
-            
-            const previousEndDate = new Date(previousLastSlot.dateFin || getDateFromWeekDay(previousLastSlot.semaine, previousLastSlot.jour, previousLastSlot.heureFin));
 
+            const cisaillageEndDate = new Date(cisaillageLastSlot.dateFin || getDateFromWeekDay(cisaillageLastSlot.semaine, cisaillageLastSlot.jour, cisaillageLastSlot.heureFin));
 
-            // Comparaison stricte: début actuel doit être >= fin précédente
-            if (targetStartDate < previousEndDate) {
-                // Calculer l'écart de temps
-                const timeDiff = Math.round((previousEndDate - targetStartDate) / (1000 * 60)); // en minutes
-
-                // Calculer l'heure suggérée (arrondie à l'heure supérieure complète)
-                const endHourFloat = parseInt(previousLastSlot.heureFin.split(':')[0]) + parseInt(previousLastSlot.heureFin.split(':')[1]) / 60;
+            // Comparaison stricte: début actuel doit être >= fin Cisaillage
+            if (targetStartDate < cisaillageEndDate) {
+                const timeDiff = Math.round((cisaillageEndDate - targetStartDate) / (1000 * 60));
+                const endHourFloat = parseInt(cisaillageLastSlot.heureFin.split(':')[0]) + parseInt(cisaillageLastSlot.heureFin.split(':')[1]) / 60;
                 const suggestedHour = Math.ceil(endHourFloat);
                 const suggestedTime = `${suggestedHour.toString().padStart(2, '0')}:00`;
 
                 return {
                     valid: false,
-                    message: `⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n"${operation.type}" ne peut pas commencer AVANT la fin de "${previousOp.type}"\n\n📅 ${previousOp.type} se termine:\n   → S${previousLastSlot.semaine} ${previousLastSlot.jour} à ${previousLastSlot.heureFin}\n\n📅 ${operation.type} commence:\n   → S${targetWeek} ${targetDay} à ${targetStartTime}\n\n⏰ Conflit: ${timeDiff} minutes de chevauchement\n\n💡 Solution: Placez "${operation.type}" à partir de ${suggestedTime} (heure complète suivante)\n\n❌ Respectez l'ordre chronologique dans le planning!`
+                    message: `⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n"${operation.type}" ne peut pas commencer AVANT la fin de "Cisaillage"\n\n📅 Cisaillage se termine:\n   → S${cisaillageLastSlot.semaine} ${cisaillageLastSlot.jour} à ${cisaillageLastSlot.heureFin}\n\n📅 ${operation.type} commence:\n   → S${targetWeek} ${targetDay} à ${targetStartTime}\n\n⏰ Conflit: ${timeDiff} minutes de chevauchement\n\n💡 Solution: Placez "${operation.type}" à partir de ${suggestedTime}`
                 };
             }
         }
     }
 
-    // 🔒 RÈGLE 2: Si l'opération SUIVANTE est placée, celle-ci doit SE TERMINER AVANT son début
-    if (operationIndex < sortedOps.length - 1) {
-        const nextOp = sortedOps[operationIndex + 1]; // Use sorted list
-
-        if (nextOp.slots && nextOp.slots.length > 0) {
-            // Trouver la date de début de la première slot de l'opération suivante
-            // We need the absolute earliest start time
-            const nextFirstSlot = [...nextOp.slots].sort((a,b) => {
-                 if (a.semaine !== b.semaine) return a.semaine - b.semaine;
-                 const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
-                 if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
-                 return a.heureDebut.localeCompare(b.heureDebut);
+    // 🔒 RÈGLE 2: Si on place Cisaillage, il doit se terminer avant Poinçonnage ET Pliage
+    if (currentType === 'Cisaillage') {
+        // Vérifier contre Poinçonnage
+        const poinconnageOp = operations.find(op => op.type === 'Poinçonnage');
+        if (poinconnageOp && poinconnageOp.slots && poinconnageOp.slots.length > 0) {
+            const poinconnageFirstSlot = [...poinconnageOp.slots].sort((a,b) => {
+                if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+                const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+                if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+                return a.heureDebut.localeCompare(b.heureDebut);
             })[0];
-            
-            const nextStartDate = new Date(nextFirstSlot.dateDebut || getDateFromWeekDay(nextFirstSlot.semaine, nextFirstSlot.jour, nextFirstSlot.heureDebut));
 
-            // Comparaison stricte: fin actuelle doit être <= début suivante
-            if (targetEndDate > nextStartDate) {
-                // Calculer l'heure de fin estimée
-                const endHour = parseInt(targetStartTime.split(':')[0]) + Math.floor(operation.dureeTotal);
-                const endMinute = Math.round((operation.dureeTotal % 1) * 60);
-                const estimatedEndTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}`;
+            const poinconnageStartDate = new Date(poinconnageFirstSlot.dateDebut || getDateFromWeekDay(poinconnageFirstSlot.semaine, poinconnageFirstSlot.jour, poinconnageFirstSlot.heureDebut));
 
-                // Calculer l'écart de temps
-                const timeDiff = Math.round((targetEndDate - nextStartDate) / (1000 * 60)); // en minutes
-
-                // Calculer l'heure de début maximale (en arrondissant vers le bas)
-                // Il faut que cette opération se termine avant nextStart
-                const nextStartHour = parseInt(nextFirstSlot.heureDebut.split(':')[0]) + parseInt(nextFirstSlot.heureDebut.split(':')[1]) / 60;
-                const maxStartHour = Math.floor(nextStartHour - operation.dureeTotal);
-                const minWorkHour = nextFirstSlot.jour === 'Vendredi' ? 7 : 7.5;
-                const suggestedMaxTime = maxStartHour >= minWorkHour ? `${maxStartHour.toString().padStart(2, '0')}:00` : 'impossible ce jour';
-
+            if (targetEndDate > poinconnageStartDate) {
                 return {
                     valid: false,
-                    message: `⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n"${operation.type}" doit SE TERMINER AVANT le début de "${nextOp.type}"\n\n📅 ${operation.type} se termine:\n   → S${targetWeek} ${targetDay} à ${estimatedEndTime} (estimé)\n\n📅 ${nextOp.type} commence:\n   → S${nextFirstSlot.semaine} ${nextFirstSlot.jour} à ${nextFirstSlot.heureDebut}\n\n⏰ Conflit: ${timeDiff} minutes de chevauchement\n\n💡 Solution: Placez "${operation.type}" au plus tard à ${suggestedMaxTime}\n\n❌ Respectez l'ordre chronologique dans le planning!`
+                    message: `⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n"Cisaillage" doit SE TERMINER AVANT le début de "Poinçonnage"\n\n📅 Poinçonnage commence:\n   → S${poinconnageFirstSlot.semaine} ${poinconnageFirstSlot.jour} à ${poinconnageFirstSlot.heureDebut}\n\n💡 Solution: Placez "Cisaillage" plus tôt`
+                };
+            }
+        }
+
+        // Vérifier contre Pliage
+        const pliageOp = operations.find(op => op.type === 'Pliage');
+        if (pliageOp && pliageOp.slots && pliageOp.slots.length > 0) {
+            const pliageFirstSlot = [...pliageOp.slots].sort((a,b) => {
+                if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+                const days = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+                if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+                return a.heureDebut.localeCompare(b.heureDebut);
+            })[0];
+
+            const pliageStartDate = new Date(pliageFirstSlot.dateDebut || getDateFromWeekDay(pliageFirstSlot.semaine, pliageFirstSlot.jour, pliageFirstSlot.heureDebut));
+
+            if (targetEndDate > pliageStartDate) {
+                return {
+                    valid: false,
+                    message: `⛔ ORDRE CHRONOLOGIQUE INVALIDE\n\n"Cisaillage" doit SE TERMINER AVANT le début de "Pliage"\n\n📅 Pliage commence:\n   → S${pliageFirstSlot.semaine} ${pliageFirstSlot.jour} à ${pliageFirstSlot.heureDebut}\n\n💡 Solution: Placez "Cisaillage" plus tôt`
                 };
             }
         }
     }
 
+    // NOTE: Poinçonnage et Pliage peuvent se chevaucher - pas de vérification entre eux
     return { valid: true, message: '' };
 }
 
@@ -3612,11 +3603,18 @@ function initializeSidebarSearch() {
 
 /**
  * Cascade Reschedule: Automatically moves subsequent operations if chronological order is broken
+ * NOUVELLE RÈGLE: Cascade UNIQUEMENT si Cisaillage est modifié
+ * Poinçonnage et Pliage peuvent se chevaucher, donc pas de cascade entre eux
  */
 function replanifierOperationsSuivantes(cmd, modifiedOp) {
+    // Ne cascader que si l'opération modifiée est Cisaillage
+    if (modifiedOp.type !== 'Cisaillage') {
+        return; // Pas de cascade pour Poinçonnage/Pliage car ils peuvent se chevaucher
+    }
+
     const priority = ['Cisaillage', 'Poinçonnage', 'Pliage'];
     const startIdx = priority.indexOf(modifiedOp.type);
-    
+
     if (startIdx === -1 || startIdx === priority.length - 1) return; // Last op or unknown
 
     let previousOp = modifiedOp;
@@ -3797,6 +3795,8 @@ function initDragAndDrop() {
 
 /**
  * Handle drop on sidebar (Unplan operation)
+ * Cascade UNIQUEMENT si on retire Cisaillage
+ * Poinçonnage et Pliage peuvent être retirés individuellement
  */
 function handleSidebarDrop(e) {
     e.preventDefault();
@@ -3814,35 +3814,40 @@ function handleSidebarDrop(e) {
     const operation = cmd.operations.find(op => op.type === draggedOperation.operationType);
     if (!operation) return;
 
-    if (!confirm(`Retirer ${operation.type} de la commande ${cmd.id} du planning ?\nCela retirera également les opérations suivantes (ordre chronologique).`)) {
-        return;
-    }
-
-    // UNPLAN LOGIC: Remove this op AND all subsequent ops
-    // Order: Cisaillage -> Poinçonnage -> Pliage
-    const priority = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
-    const currentPriority = priority[operation.type] || 99;
-
+    const operationType = operation.type;
     let removedCount = 0;
 
-    cmd.operations.forEach(op => {
-        const opPriority = priority[op.type] || 99;
-        
-        // If this operation is the one dragged OR comes AFTER it in sequence
-        if (opPriority >= currentPriority) {
+    // Cascade UNIQUEMENT si on retire Cisaillage
+    if (operationType === 'Cisaillage') {
+        if (!confirm(`Retirer Cisaillage de la commande ${cmd.id} ?\n\nCela retirera également Poinçonnage et Pliage.`)) {
+            return;
+        }
+
+        // Retirer toutes les opérations
+        cmd.operations.forEach(op => {
             if (op.slots && op.slots.length > 0) {
                 op.slots = [];
                 op.statut = "Non placée";
                 op.progressionReelle = 0;
                 removedCount++;
             }
+        });
+    } else {
+        // Poinçonnage ou Pliage : retirer uniquement cette opération
+        if (!confirm(`Retirer ${operationType} de la commande ${cmd.id} ?`)) {
+            return;
         }
-    });
+
+        operation.slots = [];
+        operation.statut = "Non placée";
+        operation.progressionReelle = 0;
+        removedCount = 1;
+    }
 
     // Update main command status
     const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
     const anyPlaced = cmd.operations.some(op => op.slots && op.slots.length > 0);
-    
+
     if (allPlaced) cmd.statut = "Planifiée";
     else if (anyPlaced) cmd.statut = "En cours"; // Partially placed
     else cmd.statut = "Non placée";
@@ -4218,48 +4223,54 @@ async function handleDrop(e) {
     // B. Strict Global Chronology Constraints
     let chronologyMinDecimal = 0;
     const targetDateStart = getDateFromWeekDay(searchWeek, searchDay, "00:00", searchYear);
-    const targetDateEnd = new Date(targetDateStart); 
-    targetDateEnd.setDate(targetDateEnd.getDate() + 1); 
+    const targetDateEnd = new Date(targetDateStart);
+    targetDateEnd.setDate(targetDateEnd.getDate() + 1);
 
-    const priorityMap = { 'Cisaillage': 1, 'Poinçonnage': 2, 'Pliage': 3 };
-    const sortedOps = [...cmd.operations].sort((a,b) => (priorityMap[a.type]||9) - (priorityMap[b.type]||9));
-    const currentOpIdx = sortedOps.indexOf(operation);
+    // Helper: Vérifie si deux opérations peuvent se chevaucher (Poinçonnage/Pliage parallèle)
+    const isParallelAllowed = (type1, type2) => {
+        return (type1 === 'Poinçonnage' || type1 === 'Pliage') &&
+               (type2 === 'Poinçonnage' || type2 === 'Pliage');
+    };
 
-    // Check Predecessor
-    for (let i = currentOpIdx - 1; i >= 0; i--) {
-        const prev = sortedOps[i];
-        if (prev.slots && prev.slots.length > 0) {
-            const lastSlot = [...prev.slots].sort((a,b) => a.dateFin.localeCompare(b.dateFin)).pop();
-            const prevEndDate = new Date(lastSlot.dateFin);
-            
-            if (prevEndDate.getTime() > targetDateEnd.getTime() - 60000) {
-                restoreAndAlert(`⛔ IMPOSSIBLE : L'opération précédente (${prev.type}) termine après ce jour.`);
+    // Check Predecessor - Uniquement Cisaillage impose une contrainte sur Poinçonnage/Pliage
+    const cisaillageOp = cmd.operations.find(op => op.type === 'Cisaillage');
+    if (cisaillageOp && cisaillageOp.slots && cisaillageOp.slots.length > 0) {
+        // Si on déplace Poinçonnage ou Pliage, Cisaillage doit être terminé avant
+        if (operation.type === 'Poinçonnage' || operation.type === 'Pliage') {
+            const lastSlot = [...cisaillageOp.slots].sort((a,b) => a.dateFin.localeCompare(b.dateFin)).pop();
+            const cisaillageEndDate = new Date(lastSlot.dateFin);
+
+            if (cisaillageEndDate.getTime() > targetDateEnd.getTime() - 60000) {
+                restoreAndAlert(`⛔ IMPOSSIBLE : Cisaillage termine après ce jour.`);
                 return;
             }
-            if (prevEndDate.getTime() > targetDateStart.getTime()) {
-                chronologyMinDecimal = prevEndDate.getHours() + prevEndDate.getMinutes()/60;
+            if (cisaillageEndDate.getTime() > targetDateStart.getTime()) {
+                chronologyMinDecimal = cisaillageEndDate.getHours() + cisaillageEndDate.getMinutes()/60;
             }
-            break; 
         }
     }
 
-    // Check Successor
+    // Check Successor - Uniquement si on déplace Cisaillage, vérifier contre Poinçonnage ET Pliage
     let successorMaxDecimal = 24;
-    for (let i = currentOpIdx + 1; i < sortedOps.length; i++) {
-        const next = sortedOps[i];
-        if (next.slots && next.slots.length > 0) {
-            const firstSlot = [...next.slots].sort((a,b) => a.dateDebut.localeCompare(b.dateDebut))[0];
-            const nextStartDate = new Date(firstSlot.dateDebut);
-            if (nextStartDate.getTime() < targetDateStart.getTime()) {
-                restoreAndAlert(`⛔ IMPOSSIBLE : L'opération suivante (${next.type}) commence avant ce jour.`);
-                return;
+    if (operation.type === 'Cisaillage') {
+        // Trouver le plus tôt entre Poinçonnage et Pliage
+        for (const opType of ['Poinçonnage', 'Pliage']) {
+            const nextOp = cmd.operations.find(op => op.type === opType);
+            if (nextOp && nextOp.slots && nextOp.slots.length > 0) {
+                const firstSlot = [...nextOp.slots].sort((a,b) => a.dateDebut.localeCompare(b.dateDebut))[0];
+                const nextStartDate = new Date(firstSlot.dateDebut);
+                if (nextStartDate.getTime() < targetDateStart.getTime()) {
+                    restoreAndAlert(`⛔ IMPOSSIBLE : ${opType} commence avant ce jour.`);
+                    return;
+                }
+                if (nextStartDate.getTime() < targetDateEnd.getTime()) {
+                    const nextStartDecimal = nextStartDate.getHours() + nextStartDate.getMinutes()/60;
+                    successorMaxDecimal = Math.min(successorMaxDecimal, nextStartDecimal);
+                }
             }
-            if (nextStartDate.getTime() < targetDateEnd.getTime()) {
-                successorMaxDecimal = nextStartDate.getHours() + nextStartDate.getMinutes()/60;
-            }
-            break;
         }
     }
+    // NOTE: Poinçonnage et Pliage peuvent se chevaucher - pas de contrainte successor entre eux
 
     const effectiveSearchStart = Math.max(dropDecimal, chronologyMinDecimal);
     const effectiveSearchTimeStr = formatDecimalTime(effectiveSearchStart);
@@ -4420,16 +4431,32 @@ async function handleDrop(e) {
 
 /**
  * Automatically place an order
+ * Support du placement parallèle Poinçonnage/Pliage
  */
 async function placerAutomatiquement(commandeId) {
     const cmd = commandes.find(c => c.id === commandeId);
     if (!cmd) return;
 
-    // 🔒 VALIDATION CRITIQUE: Vérifier que la commande a les 3 opérations dans le bon ordre
+    // 🔒 VALIDATION CRITIQUE: Vérifier que la commande a les opérations dans le bon ordre
     const orderValidation = validateOperationOrder(cmd);
     if (!orderValidation.valid) {
         alert('⛔ ORDRE DE PRODUCTION INVALIDE\n\n' + orderValidation.message);
         return;
+    }
+
+    // Vérifier si la commande a Poinçonnage ET Pliage (tous deux non placés)
+    const poinconnageOp = cmd.operations.find(op => op.type === 'Poinçonnage' && (!op.slots || op.slots.length === 0));
+    const pliageOp = cmd.operations.find(op => op.type === 'Pliage' && (!op.slots || op.slots.length === 0));
+
+    let placeInParallel = false;
+
+    if (poinconnageOp && pliageOp) {
+        placeInParallel = confirm(
+            'Cette commande contient Poinçonnage et Pliage.\n\n' +
+            'Voulez-vous les placer en parallèle (même créneau horaire) ?\n\n' +
+            '• OK = Placement en parallèle\n' +
+            '• Annuler = Placement séquentiel (Poinçonnage puis Pliage)'
+        );
     }
 
     // 🕒 RUSH HOUR LOGIC
@@ -4467,6 +4494,9 @@ async function placerAutomatiquement(commandeId) {
         console.log("📅 Week-end : Démarrage de la recherche lundi prochain");
     }
 
+    // Constraint après Cisaillage pour le placement parallèle
+    let constraintAfterCisaillage = null;
+
     // For each operation, find BEST machine slot (load-balanced)
     // Use for...of to allow breaking if an operation fails
     for (const operation of cmd.operations) {
@@ -4483,13 +4513,20 @@ async function placerAutomatiquement(commandeId) {
         let assignedMachine = null; // Force continuity on same machine
         let nextStartConstraint = null; // Where to continue (week, day, time)
 
+        // En mode parallèle, Poinçonnage et Pliage démarrent au même endroit (après Cisaillage)
+        let parallelStartConstraint = null;
+        if (placeInParallel && (operation.type === 'Poinçonnage' || operation.type === 'Pliage')) {
+            parallelStartConstraint = constraintAfterCisaillage || globalMinStart;
+            console.log(`🔀 Mode parallèle: ${operation.type} démarre à S${parallelStartConstraint.week} ${DAYS_OF_WEEK[parallelStartConstraint.dayIndex]} ${parallelStartConstraint.timeStr}`);
+        }
+
         // Loop to place chunks until full duration is scheduled
         while (remainingDuration > 0.01) { // 0.01 tolerance for float math
 
             // 🎯 Find best slot for remaining duration (or largest available chunk)
             // Pass globalMinStart to constrain search
             let machineList = availableMachines;
-            let searchConstraint = globalMinStart;
+            let searchConstraint = parallelStartConstraint || globalMinStart;
 
             // 🔒 CONTINUITY: If already assigned a machine, force same machine and continue from last end
             if (assignedMachine) {
@@ -4654,6 +4691,26 @@ async function placerAutomatiquement(commandeId) {
         }
 
         operation.statut = "Planifiée";
+
+        // Sauvegarder la contrainte après Cisaillage pour le placement parallèle
+        if (operation.type === 'Cisaillage' && placeInParallel) {
+            // Trouver la fin de la dernière slot de Cisaillage
+            if (operation.slots.length > 0) {
+                const lastSlot = [...operation.slots].sort((a, b) => {
+                    if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+                    const days = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
+                    if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+                    return a.heureFin.localeCompare(b.heureFin);
+                }).pop();
+
+                constraintAfterCisaillage = {
+                    week: lastSlot.semaine,
+                    dayIndex: DAYS_OF_WEEK.indexOf(lastSlot.jour),
+                    timeStr: lastSlot.heureFin
+                };
+                console.log(`📌 Contrainte après Cisaillage sauvegardée: S${constraintAfterCisaillage.week} ${lastSlot.jour} ${constraintAfterCisaillage.timeStr}`);
+            }
+        }
     }
 
     // Update command status
@@ -10436,6 +10493,21 @@ function initPlanifierModal(cmd, targetWeek, targetYear) {
     // Opérations à placer
     renderPlanifierOperations(cmd);
 
+    // Afficher/cacher l'option parallèle selon les opérations à placer
+    const opsAPlacer = cmd.operations.filter(op => !op.slots || op.slots.length === 0);
+    const hasPoinconnage = opsAPlacer.some(op => op.type === 'Poinçonnage');
+    const hasPliage = opsAPlacer.some(op => op.type === 'Pliage');
+    const parallelOption = document.getElementById('planifierParallelOption');
+    const parallelCheckbox = document.getElementById('planifierParallelCheckbox');
+
+    if (hasPoinconnage && hasPliage) {
+        parallelOption.style.display = 'block';
+        parallelCheckbox.checked = false; // Reset checkbox
+    } else {
+        parallelOption.style.display = 'none';
+        parallelCheckbox.checked = false;
+    }
+
     // Jours de la semaine
     renderPlanifierDayOptions(targetWeek, targetYear);
 
@@ -10660,6 +10732,8 @@ function updateTimeSliderForDay() {
 
 /**
  * Calcule le placement semi-automatique
+ * Support du placement parallèle Poinçonnage/Pliage
+ * Prend en compte les opérations déjà placées (ex: Cisaillage)
  */
 function calculerPlacementSemiAuto() {
     const state = planifierSemiAutoState;
@@ -10677,6 +10751,9 @@ function calculerPlacementSemiAuto() {
         return;
     }
 
+    // Vérifier l'option parallèle
+    const placeInParallel = document.getElementById('planifierParallelCheckbox')?.checked || false;
+
     // Construire la contrainte de départ
     const startDay = DAYS_OF_WEEK[state.selectedDay];
     const startTime = state.selectedTime;
@@ -10691,18 +10768,66 @@ function calculerPlacementSemiAuto() {
         timeStr: startTime
     };
 
+    // Contrainte après Cisaillage pour le placement parallèle
+    let constraintAfterCisaillage = null;
+
+    // Vérifier si Cisaillage est déjà placé (contrainte obligatoire pour Poinçonnage/Pliage)
+    const cisaillageOp = cmd.operations.find(op => op.type === 'Cisaillage');
+    if (cisaillageOp && cisaillageOp.slots && cisaillageOp.slots.length > 0) {
+        // Trouver la fin de Cisaillage
+        const cisaillageLastSlot = [...cisaillageOp.slots].sort((a, b) => {
+            if (a.semaine !== b.semaine) return a.semaine - b.semaine;
+            const days = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
+            if (a.jour !== b.jour) return days.indexOf(a.jour) - days.indexOf(b.jour);
+            return a.heureFin.localeCompare(b.heureFin);
+        }).pop();
+
+        const cisaillageEndConstraint = {
+            week: cisaillageLastSlot.semaine,
+            year: cisaillageLastSlot.annee || startYear,
+            dayIndex: DAYS_OF_WEEK.indexOf(cisaillageLastSlot.jour),
+            timeStr: cisaillageLastSlot.heureFin
+        };
+
+        // Comparer avec la contrainte utilisateur et prendre la plus tardive
+        const userDate = getDateFromWeekDay(startWeek, startDay, startTime, startYear);
+        const cisaillageEndDate = getDateFromWeekDay(
+            cisaillageEndConstraint.week,
+            DAYS_OF_WEEK[cisaillageEndConstraint.dayIndex],
+            cisaillageEndConstraint.timeStr,
+            cisaillageEndConstraint.year
+        );
+
+        if (cisaillageEndDate > userDate) {
+            // Cisaillage se termine après l'heure choisie par l'utilisateur
+            currentConstraint = cisaillageEndConstraint;
+            console.log(`⚠️ Cisaillage déjà placé: contrainte ajustée à S${currentConstraint.week} ${DAYS_OF_WEEK[currentConstraint.dayIndex]} ${currentConstraint.timeStr}`);
+            Toast.info(`Contrainte ajustée: Cisaillage se termine à ${cisaillageEndConstraint.timeStr}`);
+        }
+
+        // Pour le mode parallèle, utiliser cette contrainte
+        constraintAfterCisaillage = currentConstraint;
+    }
+
     // Pour chaque opération, trouver le créneau
     for (let i = 0; i < opsAPlacer.length; i++) {
         const op = opsAPlacer[i];
         const selectedMachine = state.selectedMachines[i];
         const duration = hasTimeOverride(op) ? op.dureeOverride : op.dureeTotal;
 
+        // En mode parallèle, Poinçonnage et Pliage démarrent au même endroit (après Cisaillage)
+        let constraintToUse = currentConstraint;
+        if (placeInParallel && (op.type === 'Poinçonnage' || op.type === 'Pliage')) {
+            constraintToUse = constraintAfterCisaillage || currentConstraint;
+            console.log(`🔀 Mode parallèle: ${op.type} démarre à S${constraintToUse.week} ${DAYS_OF_WEEK[constraintToUse.dayIndex]} ${constraintToUse.timeStr}`);
+        }
+
         // Trouver les créneaux pour cette opération
         const slotsForOp = findSlotsForOperationSemiAuto(
             op,
             selectedMachine,
             duration,
-            currentConstraint,
+            constraintToUse,
             cmd
         );
 
@@ -10719,24 +10844,49 @@ function calculerPlacementSemiAuto() {
             duration: duration
         });
 
-        // Mettre à jour la contrainte pour l'opération suivante
-        const lastSlot = slotsForOp[slotsForOp.length - 1];
-        currentConstraint = {
-            week: lastSlot.semaine,
-            year: lastSlot.year || startYear,
-            dayIndex: DAYS_OF_WEEK.indexOf(lastSlot.jour),
-            timeStr: lastSlot.heureFin
-        };
-
-        // Si on dépasse la journée, passer au jour suivant
-        if (timeToDecimalHours(lastSlot.heureFin) >= getEndOfDayHour(lastSlot.jour)) {
-            const next = getNextWorkDay(lastSlot.jour, lastSlot.semaine, currentConstraint.year);
-            currentConstraint = {
-                week: next.week,
-                year: next.year,
-                dayIndex: DAYS_OF_WEEK.indexOf(next.day),
-                timeStr: getDayStartTime(next.day)
+        // Sauvegarder la contrainte après Cisaillage pour le mode parallèle
+        if (op.type === 'Cisaillage' && placeInParallel) {
+            const lastSlot = slotsForOp[slotsForOp.length - 1];
+            constraintAfterCisaillage = {
+                week: lastSlot.semaine,
+                year: lastSlot.year || startYear,
+                dayIndex: DAYS_OF_WEEK.indexOf(lastSlot.jour),
+                timeStr: lastSlot.heureFin
             };
+
+            // Si on dépasse la journée, passer au jour suivant
+            if (timeToDecimalHours(lastSlot.heureFin) >= getEndOfDayHour(lastSlot.jour)) {
+                const next = getNextWorkDay(lastSlot.jour, lastSlot.semaine, constraintAfterCisaillage.year);
+                constraintAfterCisaillage = {
+                    week: next.week,
+                    year: next.year,
+                    dayIndex: DAYS_OF_WEEK.indexOf(next.day),
+                    timeStr: getDayStartTime(next.day)
+                };
+            }
+            console.log(`📌 Contrainte après Cisaillage sauvegardée: S${constraintAfterCisaillage.week} ${DAYS_OF_WEEK[constraintAfterCisaillage.dayIndex]} ${constraintAfterCisaillage.timeStr}`);
+        }
+
+        // Mettre à jour la contrainte pour l'opération suivante (mode séquentiel uniquement)
+        if (!placeInParallel || op.type === 'Cisaillage') {
+            const lastSlot = slotsForOp[slotsForOp.length - 1];
+            currentConstraint = {
+                week: lastSlot.semaine,
+                year: lastSlot.year || startYear,
+                dayIndex: DAYS_OF_WEEK.indexOf(lastSlot.jour),
+                timeStr: lastSlot.heureFin
+            };
+
+            // Si on dépasse la journée, passer au jour suivant
+            if (timeToDecimalHours(lastSlot.heureFin) >= getEndOfDayHour(lastSlot.jour)) {
+                const next = getNextWorkDay(lastSlot.jour, lastSlot.semaine, currentConstraint.year);
+                currentConstraint = {
+                    week: next.week,
+                    year: next.year,
+                    dayIndex: DAYS_OF_WEEK.indexOf(next.day),
+                    timeStr: getDayStartTime(next.day)
+                };
+            }
         }
     }
 

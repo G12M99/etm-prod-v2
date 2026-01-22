@@ -4413,8 +4413,153 @@ async function handleDrop(e) {
             Toast.success(`Opération déplacée à ${gapStart}`);
         }
     } else {
-        operation.slots = slotsBackup;
-        restoreAndAlert(`Impossible de déplacer l'opération : pas de créneau contigu de ${formatHours(operation.dureeTotal)} trouvé.`);
+        // Pas de gap contigu complet - chercher un gap partiel
+        const partialGap = findNextGap(targetMachine, searchDay, searchWeek, effectiveSearchTimeStr, searchYear);
+
+        if (partialGap) {
+            const gapStartDec = timeToDecimalHours(partialGap.startTime);
+            const normalEndHour = searchDay === 'Vendredi' ? 12 : 16.5;
+            const overtimeEndHour = searchDay === 'Vendredi' ? 14 : 18;
+
+            // Calculer combien on peut placer dans le gap avant heures normales
+            const availableInGap = Math.min(partialGap.duration, Math.max(0, normalEndHour - gapStartDec));
+            const overtimeNeeded = Math.min(operation.dureeTotal - availableInGap, overtimeEndHour - normalEndHour);
+
+            // Vérifier limites H sup
+            const machineOvertimeUsed = overtimeTracker.byMachine[targetMachine]?.hours || 0;
+            const weeklyOvertimeUsed = overtimeTracker.totalHoursUsed || 0;
+            const canUseOvertime = (
+                machineOvertimeUsed + overtimeNeeded <= 2 && // Max 2h/jour
+                weeklyOvertimeUsed + overtimeNeeded <= 10    // Max 10h/semaine
+            );
+
+            // Vérifier si heures sup permettent de compléter l'opération
+            const totalAvailableWithOvertime = availableInGap + (canUseOvertime ? overtimeNeeded : 0);
+
+            if (canUseOvertime && overtimeNeeded > 0.25 && totalAvailableWithOvertime >= operation.dureeTotal - 0.01) {
+                // Proposer popup H sup
+                const confirmResult = await showOvertimeConfirmDialog({
+                    type: operation.type,
+                    machine: targetMachine,
+                    day: searchDay,
+                    normalDuration: availableInGap,
+                    overtimeDuration: overtimeNeeded,
+                    totalDuration: operation.dureeTotal
+                });
+
+                if (confirmResult === 'accept') {
+                    // Accepté → tracker heures sup et placer l'opération complète
+                    if (!overtimeTracker.byMachine[targetMachine]) {
+                        overtimeTracker.byMachine[targetMachine] = { hours: 0 };
+                    }
+                    overtimeTracker.byMachine[targetMachine].hours += overtimeNeeded;
+                    overtimeTracker.totalHoursUsed += overtimeNeeded;
+
+                    const endDec = calculateEndTimeWithLunch(gapStartDec, operation.dureeTotal, searchDay);
+
+                    operation.slots = [{
+                        machine: targetMachine,
+                        duree: operation.dureeTotal,
+                        semaine: searchWeek,
+                        jour: searchDay,
+                        heureDebut: partialGap.startTime,
+                        heureFin: formatDecimalTime(endDec),
+                        dateDebut: getDateFromWeekDay(searchWeek, searchDay, partialGap.startTime, searchYear).toISOString(),
+                        dateFin: getDateFromWeekDay(searchWeek, searchDay, formatDecimalTime(endDec), searchYear).toISOString(),
+                        overtime: true
+                    }];
+
+                    operation.statut = "Planifiée";
+                    const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
+                    cmd.statut = allPlaced ? "Planifiée" : "En cours";
+
+                    if (typeof replanifierOperationsSuivantes === 'function') {
+                        replanifierOperationsSuivantes(cmd, operation);
+                    }
+
+                    renderVueJournee();
+                    renderCommandesNonPlacees(currentSearchQuery || '');
+                    saveData();
+                    Toast.success(`Opération placée avec ${formatHours(overtimeNeeded)} d'heures supplémentaires`);
+                } else {
+                    // Refusé → Scinder l'opération
+                    const fragments = splitAtNormalHoursEnd(
+                        operation,
+                        targetMachine,
+                        searchWeek,
+                        searchYear,
+                        searchDay,
+                        gapStartDec
+                    );
+
+                    operation.slots = fragments.map(frag => ({
+                        machine: frag.machine,
+                        duree: frag.duration,
+                        semaine: frag.week,
+                        annee: frag.year,
+                        jour: frag.day,
+                        heureDebut: formatDecimalTime(frag.startHour),
+                        heureFin: formatDecimalTime(frag.endHour),
+                        dateDebut: getDateFromWeekDay(frag.week, frag.day, formatDecimalTime(frag.startHour), frag.year).toISOString(),
+                        dateFin: getDateFromWeekDay(frag.week, frag.day, formatDecimalTime(frag.endHour), frag.year).toISOString(),
+                        overtime: isInOvertimeZone(frag.day, frag.startHour)
+                    }));
+
+                    operation.statut = "Planifiée";
+                    const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
+                    cmd.statut = allPlaced ? "Planifiée" : "En cours";
+
+                    if (typeof replanifierOperationsSuivantes === 'function') {
+                        replanifierOperationsSuivantes(cmd, operation);
+                    }
+
+                    renderVueJournee();
+                    renderCommandesNonPlacees(currentSearchQuery || '');
+                    saveData();
+                    Toast.info(`Opération scindée en ${fragments.length} partie(s) (heures sup refusées)`);
+                }
+            } else {
+                // Scinder directement (pas de H sup possibles/suffisantes)
+                const fragments = splitAtNormalHoursEnd(
+                    operation,
+                    targetMachine,
+                    searchWeek,
+                    searchYear,
+                    searchDay,
+                    gapStartDec
+                );
+
+                operation.slots = fragments.map(frag => ({
+                    machine: frag.machine,
+                    duree: frag.duration,
+                    semaine: frag.week,
+                    annee: frag.year,
+                    jour: frag.day,
+                    heureDebut: formatDecimalTime(frag.startHour),
+                    heureFin: formatDecimalTime(frag.endHour),
+                    dateDebut: getDateFromWeekDay(frag.week, frag.day, formatDecimalTime(frag.startHour), frag.year).toISOString(),
+                    dateFin: getDateFromWeekDay(frag.week, frag.day, formatDecimalTime(frag.endHour), frag.year).toISOString(),
+                    overtime: isInOvertimeZone(frag.day, frag.startHour)
+                }));
+
+                operation.statut = "Planifiée";
+                const allPlaced = cmd.operations.every(op => op.slots && op.slots.length > 0);
+                cmd.statut = allPlaced ? "Planifiée" : "En cours";
+
+                if (typeof replanifierOperationsSuivantes === 'function') {
+                    replanifierOperationsSuivantes(cmd, operation);
+                }
+
+                renderVueJournee();
+                renderCommandesNonPlacees(currentSearchQuery || '');
+                saveData();
+                Toast.info(`Opération scindée en ${fragments.length} partie(s)`);
+            }
+        } else {
+            // Aucun gap du tout
+            operation.slots = slotsBackup;
+            restoreAndAlert(`Impossible de déplacer l'opération : aucun créneau disponible.`);
+        }
     }
 
     function restoreAndAlert(msg) {

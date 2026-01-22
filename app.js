@@ -5250,19 +5250,19 @@ class DataSyncManager {
     async upsertCommandeToSupabase(cmd) {
         if (!supabaseClient) return;
 
-        // Upsert commande
+        // Upsert commande (convertir les chaînes vides en null pour Supabase)
         const { error: cmdError } = await supabaseClient
             .from('commandes')
             .upsert({
                 id: cmd.id,
-                client_name: cmd.client,
-                date_livraison: cmd.dateLivraison,
-                statut: cmd.statut,
-                materiau: cmd.materiau,
-                poids: cmd.poids,
-                ref_cde_client: cmd.refCdeClient,
-                ressource: cmd.ressource,
-                semaine_affectee: cmd.semaineAffectee,
+                client_name: cmd.client || null,
+                date_livraison: cmd.dateLivraison && cmd.dateLivraison !== '' ? cmd.dateLivraison : null,
+                statut: cmd.statut || null,
+                materiau: cmd.materiau || null,
+                poids: cmd.poids || 0,
+                ref_cde_client: cmd.refCdeClient || null,
+                ressource: cmd.ressource || null,
+                semaine_affectee: cmd.semaineAffectee || null,
                 updated_at: new Date().toISOString()
             }, { onConflict: 'id' });
 

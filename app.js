@@ -10,6 +10,30 @@ let machinesConfig = JSON.parse(JSON.stringify(MACHINES_CONFIG));
 const SCHEDULE_STORAGE_KEY = 'etm_schedule_config';
 let scheduleConfig = JSON.parse(JSON.stringify(SCHEDULE_DEFAULT_CONFIG));
 
+// ===================================
+// Configuration Supabase
+// ===================================
+const SUPABASE_URL = 'https://veyqcnoaiqotikpjfgjq.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_wa6y4sYvbvKtzSFBzw7lBg_CYdxXr1P';
+let supabaseClient = null;
+
+// Initialiser Supabase (appelé au démarrage)
+function initSupabase() {
+    try {
+        if (window.supabase) {
+            supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            console.log('✅ Supabase client initialisé');
+            return true;
+        } else {
+            console.warn('⚠️ Supabase SDK non chargé, mode localStorage uniquement');
+            return false;
+        }
+    } catch (e) {
+        console.error('❌ Erreur initialisation Supabase:', e);
+        return false;
+    }
+}
+
 // Variables de compatibilité avec le code existant
 let MACHINES = {
     cisailles: machinesConfig.cisaillage.filter(m => m.active).map(m => m.name),
@@ -5081,8 +5105,28 @@ class DataSyncManager {
         this.startAutoSync();
     }
 
-    // Méthode 2: Chargement local
-    loadLocalData() {
+    // Méthode 2: Chargement local (Supabase + localStorage fallback)
+    async loadLocalData() {
+        // Essayer Supabase d'abord
+        if (supabaseClient) {
+            try {
+                this.updateSyncIndicator('syncing', 'Chargement Supabase...');
+                const commandesData = await this.loadCommandesFromSupabase();
+                if (commandesData && commandesData.length > 0) {
+                    commandes = commandesData;
+                    console.log(`✅ Loaded ${commandes.length} orders from Supabase.`);
+                    this.updateSyncIndicator('synced', 'Supabase connecté');
+                    // Sauvegarder en localStorage comme backup
+                    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(commandes));
+                    refresh();
+                    return;
+                }
+            } catch (e) {
+                console.warn('⚠️ Supabase load failed, falling back to localStorage:', e);
+            }
+        }
+
+        // Fallback: localStorage
         try {
             const stored = localStorage.getItem(this.STORAGE_KEY);
             if (stored) {
@@ -5098,6 +5142,11 @@ class DataSyncManager {
                         this.saveLocalData();
                         Toast.info('Noms de machines mis à jour');
                     }
+
+                    // Migrer vers Supabase si disponible
+                    if (supabaseClient && commandes.length > 0) {
+                        this.migrateToSupabase();
+                    }
                 }
             } else {
                 console.log('ℹ️ No local data found. Waiting for Google Sheets sync...');
@@ -5108,6 +5157,167 @@ class DataSyncManager {
             console.error('❌ Error loading local data:', e);
             commandes = []; // FIX: Tableau vide au lieu de loadLocalOrders()
             this.updateSyncIndicator('error', 'Erreur chargement local');
+        }
+    }
+
+    // Charger les commandes depuis Supabase
+    async loadCommandesFromSupabase() {
+        const { data: commandesData, error: cmdError } = await supabaseClient
+            .from('commandes')
+            .select('*');
+
+        if (cmdError) throw cmdError;
+        if (!commandesData || commandesData.length === 0) return [];
+
+        // Charger les opérations pour chaque commande
+        const { data: operationsData, error: opError } = await supabaseClient
+            .from('operations')
+            .select('*');
+
+        if (opError) throw opError;
+
+        // Charger les slots
+        const { data: slotsData, error: slotError } = await supabaseClient
+            .from('slots')
+            .select('*');
+
+        if (slotError) throw slotError;
+
+        // Reconstruire la structure commandes avec operations et slots
+        const result = commandesData.map(cmd => {
+            const cmdOperations = (operationsData || [])
+                .filter(op => op.commande_id === cmd.id)
+                .map(op => {
+                    const opSlots = (slotsData || [])
+                        .filter(slot => slot.operation_id === op.id)
+                        .map(slot => ({
+                            machine: slot.machine_name,
+                            duree: parseFloat(slot.duree),
+                            semaine: slot.semaine,
+                            jour: slot.jour,
+                            heureDebut: slot.heure_debut,
+                            heureFin: slot.heure_fin,
+                            dateDebut: slot.date_debut,
+                            dateFin: slot.date_fin,
+                            overtime: slot.overtime
+                        }));
+                    return {
+                        type: op.type,
+                        dureeTotal: parseFloat(op.duree_total),
+                        dureeOriginal: parseFloat(op.duree_original),
+                        dureeOverride: op.duree_override ? parseFloat(op.duree_override) : null,
+                        overrideTimestamp: op.override_timestamp,
+                        progressionReelle: parseFloat(op.progression_reelle),
+                        statut: op.statut,
+                        slots: opSlots
+                    };
+                });
+
+            return {
+                id: cmd.id,
+                client: cmd.client_name,
+                dateLivraison: cmd.date_livraison,
+                statut: cmd.statut,
+                materiau: cmd.materiau,
+                poids: parseFloat(cmd.poids),
+                refCdeClient: cmd.ref_cde_client,
+                ressource: cmd.ressource,
+                semaineAffectee: cmd.semaine_affectee,
+                operations: cmdOperations
+            };
+        });
+
+        return result;
+    }
+
+    // Migrer les données localStorage vers Supabase
+    async migrateToSupabase() {
+        if (!supabaseClient) return;
+
+        console.log('🔄 Migration localStorage → Supabase...');
+        try {
+            for (const cmd of commandes) {
+                await this.upsertCommandeToSupabase(cmd);
+            }
+            console.log('✅ Migration vers Supabase terminée');
+            Toast.success('Données migrées vers Supabase');
+        } catch (e) {
+            console.error('❌ Erreur migration Supabase:', e);
+        }
+    }
+
+    // Insérer ou mettre à jour une commande dans Supabase
+    async upsertCommandeToSupabase(cmd) {
+        if (!supabaseClient) return;
+
+        // Upsert commande
+        const { error: cmdError } = await supabaseClient
+            .from('commandes')
+            .upsert({
+                id: cmd.id,
+                client_name: cmd.client,
+                date_livraison: cmd.dateLivraison,
+                statut: cmd.statut,
+                materiau: cmd.materiau,
+                poids: cmd.poids,
+                ref_cde_client: cmd.refCdeClient,
+                ressource: cmd.ressource,
+                semaine_affectee: cmd.semaineAffectee,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+
+        if (cmdError) throw cmdError;
+
+        // Supprimer anciennes opérations et slots pour cette commande
+        await supabaseClient
+            .from('operations')
+            .delete()
+            .eq('commande_id', cmd.id);
+
+        // Insérer opérations et slots
+        if (cmd.operations && cmd.operations.length > 0) {
+            for (const op of cmd.operations) {
+                const opId = crypto.randomUUID();
+
+                const { error: opError } = await supabaseClient
+                    .from('operations')
+                    .insert({
+                        id: opId,
+                        commande_id: cmd.id,
+                        type: op.type,
+                        duree_total: op.dureeTotal,
+                        duree_original: op.dureeOriginal,
+                        duree_override: op.dureeOverride,
+                        override_timestamp: op.overrideTimestamp,
+                        progression_reelle: op.progressionReelle || 0,
+                        statut: op.statut || 'Non placée'
+                    });
+
+                if (opError) throw opError;
+
+                // Insérer slots
+                if (op.slots && op.slots.length > 0) {
+                    const slotsToInsert = op.slots.map(slot => ({
+                        operation_id: opId,
+                        machine_id: slot.machine ? slot.machine.toLowerCase().replace(/\s+/g, '-') : null,
+                        machine_name: slot.machine,
+                        duree: slot.duree,
+                        semaine: slot.semaine,
+                        jour: slot.jour,
+                        heure_debut: slot.heureDebut,
+                        heure_fin: slot.heureFin,
+                        date_debut: slot.dateDebut,
+                        date_fin: slot.dateFin,
+                        overtime: slot.overtime || false
+                    }));
+
+                    const { error: slotError } = await supabaseClient
+                        .from('slots')
+                        .insert(slotsToInsert);
+
+                    if (slotError) throw slotError;
+                }
+            }
         }
     }
 
@@ -5307,12 +5517,13 @@ class DataSyncManager {
         }
     }
 
-    // Méthode 6: Sauvegarde locale
+    // Méthode 6: Sauvegarde locale (Supabase + localStorage)
     saveLocalData() {
+        // Toujours sauvegarder en localStorage (backup)
         try {
             const dataStr = JSON.stringify(commandes);
             localStorage.setItem(this.STORAGE_KEY, dataStr);
-            
+
             // Backup occasionnel
             if (Math.random() < 0.1) { // 10% chance
                 localStorage.setItem(this.BACKUP_KEY, dataStr);
@@ -5320,6 +5531,40 @@ class DataSyncManager {
         } catch (e) {
             console.error('❌ Quota exceeded or save error:', e);
             Toast.error('Erreur sauvegarde locale (Quota ?)');
+        }
+
+        // Sauvegarder vers Supabase en arrière-plan
+        if (supabaseClient) {
+            this.saveToSupabaseDebounced();
+        }
+    }
+
+    // Debounce pour éviter trop d'appels Supabase
+    saveToSupabaseDebounced() {
+        if (this._saveTimeout) {
+            clearTimeout(this._saveTimeout);
+        }
+        this._saveTimeout = setTimeout(() => {
+            this.saveAllToSupabase();
+        }, 2000); // Attendre 2s d'inactivité avant de sauvegarder
+    }
+
+    // Sauvegarder toutes les commandes vers Supabase
+    async saveAllToSupabase() {
+        if (!supabaseClient) return;
+
+        try {
+            console.log('💾 Sauvegarde vers Supabase...');
+
+            // Pour chaque commande modifiée, mettre à jour Supabase
+            for (const cmd of commandes) {
+                await this.upsertCommandeToSupabase(cmd);
+            }
+
+            console.log('✅ Sauvegarde Supabase terminée');
+        } catch (e) {
+            console.error('❌ Erreur sauvegarde Supabase:', e);
+            // Ne pas afficher d'erreur à l'utilisateur, localStorage est le backup
         }
     }
 
@@ -5561,15 +5806,94 @@ function updateStorageIndicator() {
 // ===================================
 
 function saveSystemEvents() {
+    // Sauvegarder en localStorage (backup)
     localStorage.setItem('etm_system_events', JSON.stringify(systemEvents));
+
+    // Sauvegarder vers Supabase
+    if (supabaseClient) {
+        saveSystemEventsToSupabase();
+    }
 }
 
-function loadSystemEvents() {
+async function saveSystemEventsToSupabase() {
+    if (!supabaseClient) return;
+
+    try {
+        // Supprimer tous les événements existants et réinsérer
+        // (approche simple pour éviter la complexité de sync)
+        for (const event of systemEvents) {
+            const eventData = {
+                id: event.id,
+                type: event.type,
+                name: event.name || event.reason || 'Événement',
+                date_start: event.dateStart || event.dateStr,
+                date_end: event.dateEnd || event.dateStr,
+                start_time_first_day: event.startTimeFirstDay,
+                end_time_last_day: event.endTimeLastDay,
+                full_last_day: event.fullLastDay !== false,
+                affected_machines: event.affectedMachines || [],
+                affected_shifts: event.affectedShifts || [],
+                description: event.description || event.reason,
+                resolved_conflicts: event.resolvedConflicts || {},
+                version: event.version || 2,
+                updated_at: new Date().toISOString()
+            };
+
+            await supabaseClient
+                .from('system_events')
+                .upsert(eventData, { onConflict: 'id' });
+        }
+
+        console.log('✅ System events sauvegardés vers Supabase');
+    } catch (e) {
+        console.error('❌ Erreur sauvegarde system events Supabase:', e);
+    }
+}
+
+async function loadSystemEvents() {
+    // Essayer Supabase d'abord
+    if (supabaseClient) {
+        try {
+            const { data, error } = await supabaseClient
+                .from('system_events')
+                .select('*');
+
+            if (!error && data && data.length > 0) {
+                systemEvents = data.map(e => ({
+                    id: e.id,
+                    type: e.type,
+                    name: e.name,
+                    dateStart: e.date_start,
+                    dateEnd: e.date_end,
+                    startTimeFirstDay: e.start_time_first_day,
+                    endTimeLastDay: e.end_time_last_day,
+                    fullLastDay: e.full_last_day,
+                    affectedMachines: e.affected_machines || [],
+                    affectedShifts: e.affected_shifts || [],
+                    description: e.description,
+                    resolvedConflicts: e.resolved_conflicts || {},
+                    version: e.version || 2
+                }));
+                console.log(`✅ Loaded ${systemEvents.length} system events from Supabase`);
+                // Backup en localStorage
+                localStorage.setItem('etm_system_events', JSON.stringify(systemEvents));
+                return;
+            }
+        } catch (e) {
+            console.warn('⚠️ Supabase system events load failed:', e);
+        }
+    }
+
+    // Fallback: localStorage
     const stored = localStorage.getItem('etm_system_events');
     if (stored) {
         systemEvents = JSON.parse(stored);
-        // Optional: Cleanup old events logic can be re-added here if needed
-        // For now, we keep everything to ensure persistence is visible
+        console.log(`✅ Loaded ${systemEvents.length} system events from localStorage`);
+
+        // Migrer vers Supabase si disponible
+        if (supabaseClient && systemEvents.length > 0) {
+            saveSystemEventsToSupabase();
+        }
     }
 }
 
@@ -9259,15 +9583,18 @@ async function init() {
     console.log('🏭 ETM PROD V2 - Planning de Production');
     console.log(`📅 Date de référence: ${currentTime.toLocaleString('fr-FR')}`);
 
+    // Initialiser Supabase
+    initSupabase();
+
     // Set initial selected week/year to current
     semaineSelectionnee = getWeekNumber(currentTime);
     anneeSelectionnee = currentTime.getFullYear();
 
-    // Charger la configuration des machines depuis localStorage
-    loadMachinesConfig();
+    // Charger la configuration des machines depuis Supabase/localStorage
+    await loadMachinesConfig();
 
-    // Charger la configuration des horaires depuis localStorage
-    loadScheduleConfig();
+    // Charger la configuration des horaires depuis Supabase/localStorage
+    await loadScheduleConfig();
 
     // Safe initialization of UI components
     if (typeof updateCurrentTime === 'function') updateCurrentTime();
@@ -9305,8 +9632,8 @@ async function init() {
         }
     }, 60000); // Every minute
 
-    // Load system events directly
-    if (typeof loadSystemEvents === 'function') loadSystemEvents();
+    // Load system events directly (async avec Supabase)
+    if (typeof loadSystemEvents === 'function') await loadSystemEvents();
 
     // Initialiser le système de sync hybride (charge local d'abord, puis tente remote)
     try {
@@ -9353,9 +9680,54 @@ window.toggleVue = toggleVue;
 // ===================================
 
 /**
- * Charge la configuration des machines depuis localStorage
+ * Charge la configuration des machines depuis Supabase/localStorage
  */
-function loadMachinesConfig() {
+async function loadMachinesConfig() {
+    // Essayer Supabase d'abord
+    if (supabaseClient) {
+        try {
+            const { data, error } = await supabaseClient
+                .from('machines')
+                .select('*')
+                .order('type');
+
+            if (!error && data && data.length > 0) {
+                // Reconstruire machinesConfig depuis les données Supabase
+                machinesConfig = {
+                    cisaillage: data.filter(m => m.type === 'cisaillage').map(m => ({
+                        id: m.id,
+                        name: m.name,
+                        capacity: parseFloat(m.capacity),
+                        color: m.color,
+                        active: m.active
+                    })),
+                    poinconnage: data.filter(m => m.type === 'poinconnage').map(m => ({
+                        id: m.id,
+                        name: m.name,
+                        capacity: parseFloat(m.capacity),
+                        color: m.color,
+                        active: m.active
+                    })),
+                    pliage: data.filter(m => m.type === 'pliage').map(m => ({
+                        id: m.id,
+                        name: m.name,
+                        capacity: parseFloat(m.capacity),
+                        color: m.color,
+                        active: m.active
+                    }))
+                };
+                console.log('✅ Configuration machines chargée depuis Supabase');
+                // Backup en localStorage
+                localStorage.setItem(MACHINES_STORAGE_KEY, JSON.stringify(machinesConfig));
+                reloadMachineArrays();
+                return;
+            }
+        } catch (e) {
+            console.warn('⚠️ Supabase machines load failed:', e);
+        }
+    }
+
+    // Fallback: localStorage
     try {
         const stored = localStorage.getItem(MACHINES_STORAGE_KEY);
         if (stored) {
@@ -9364,6 +9736,11 @@ function loadMachinesConfig() {
             if (parsed.cisaillage && parsed.poinconnage && parsed.pliage) {
                 machinesConfig = parsed;
                 console.log('✅ Configuration machines chargée depuis localStorage');
+
+                // Migrer vers Supabase si disponible
+                if (supabaseClient) {
+                    saveMachinesConfigToSupabase();
+                }
             }
         }
     } catch (e) {
@@ -9373,15 +9750,51 @@ function loadMachinesConfig() {
 }
 
 /**
- * Sauvegarde la configuration des machines dans localStorage
+ * Sauvegarde la configuration des machines dans Supabase/localStorage
  */
 function saveMachinesConfig() {
+    // Sauvegarder en localStorage (backup)
     try {
         localStorage.setItem(MACHINES_STORAGE_KEY, JSON.stringify(machinesConfig));
-        console.log('✅ Configuration machines sauvegardée');
+        console.log('✅ Configuration machines sauvegardée localStorage');
     } catch (e) {
         console.error('Erreur sauvegarde config machines:', e);
         Toast.error('Erreur lors de la sauvegarde');
+    }
+
+    // Sauvegarder vers Supabase
+    if (supabaseClient) {
+        saveMachinesConfigToSupabase();
+    }
+}
+
+async function saveMachinesConfigToSupabase() {
+    if (!supabaseClient) return;
+
+    try {
+        const allMachines = [
+            ...machinesConfig.cisaillage.map(m => ({ ...m, type: 'cisaillage' })),
+            ...machinesConfig.poinconnage.map(m => ({ ...m, type: 'poinconnage' })),
+            ...machinesConfig.pliage.map(m => ({ ...m, type: 'pliage' }))
+        ];
+
+        for (const machine of allMachines) {
+            await supabaseClient
+                .from('machines')
+                .upsert({
+                    id: machine.id,
+                    name: machine.name,
+                    type: machine.type,
+                    capacity: machine.capacity,
+                    color: machine.color,
+                    active: machine.active,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'id' });
+        }
+
+        console.log('✅ Configuration machines sauvegardée Supabase');
+    } catch (e) {
+        console.error('❌ Erreur sauvegarde machines Supabase:', e);
     }
 }
 
@@ -9791,14 +10204,104 @@ window.closeMachineEdit = closeMachineEdit;
 // ===================================================================
 
 /**
- * Charge la configuration des horaires depuis localStorage
+ * Charge la configuration des horaires depuis Supabase/localStorage
  */
-function loadScheduleConfig() {
+async function loadScheduleConfig() {
+    // Essayer Supabase d'abord
+    if (supabaseClient) {
+        try {
+            // Charger shifts
+            const { data: shiftsData, error: shiftsError } = await supabaseClient
+                .from('shifts')
+                .select('*');
+
+            // Charger shift_schedules
+            const { data: schedulesData, error: schedulesError } = await supabaseClient
+                .from('shift_schedules')
+                .select('*');
+
+            // Charger breaks
+            const { data: breaksData, error: breaksError } = await supabaseClient
+                .from('breaks')
+                .select('*');
+
+            // Charger overtime_config
+            const { data: overtimeData, error: overtimeError } = await supabaseClient
+                .from('overtime_config')
+                .select('*')
+                .limit(1)
+                .single();
+
+            // Charger overtime_slots
+            const { data: overtimeSlotsData, error: overtimeSlotsError } = await supabaseClient
+                .from('overtime_slots')
+                .select('*');
+
+            if (!shiftsError && shiftsData && shiftsData.length > 0) {
+                // Reconstruire scheduleConfig
+                const shifts = shiftsData.map(s => {
+                    const shiftSchedules = (schedulesData || []).filter(sc => sc.shift_id === s.id);
+                    const schedulesObj = {};
+                    shiftSchedules.forEach(sc => {
+                        schedulesObj[sc.day_name] = {
+                            start: sc.start_time,
+                            end: sc.end_time
+                        };
+                    });
+
+                    return {
+                        id: s.id,
+                        name: s.name,
+                        active: s.active,
+                        days: s.days || [],
+                        schedules: schedulesObj
+                    };
+                });
+
+                const breaks = (breaksData || []).map(b => ({
+                    id: b.id,
+                    name: b.name,
+                    start: b.start_time,
+                    end: b.end_time,
+                    days: b.days || [],
+                    active: b.active
+                }));
+
+                const overtime = {
+                    enabled: overtimeData?.enabled || false,
+                    maxDailyHours: overtimeData?.max_daily_hours || 2,
+                    maxWeeklyHours: overtimeData?.max_weekly_hours || 10,
+                    slots: (overtimeSlotsData || []).map(os => ({
+                        days: os.days || [],
+                        start: os.start_time,
+                        end: os.end_time,
+                        maxHours: os.max_hours
+                    }))
+                };
+
+                scheduleConfig = { shifts, breaks, overtime };
+                console.log('[ScheduleConfig] Configuration chargée depuis Supabase');
+                // Backup en localStorage
+                localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(scheduleConfig));
+                reloadScheduleArrays();
+                return;
+            }
+        } catch (e) {
+            console.warn('[ScheduleConfig] Supabase load failed:', e);
+        }
+    }
+
+    // Fallback: localStorage
     try {
         const saved = localStorage.getItem(SCHEDULE_STORAGE_KEY);
         if (saved) {
             scheduleConfig = JSON.parse(saved);
             console.log('[ScheduleConfig] Configuration chargee depuis localStorage');
+
+            // Migrer vers Supabase si disponible
+            if (supabaseClient) {
+                saveScheduleConfigToSupabase();
+            }
         }
     } catch (e) {
         console.error('[ScheduleConfig] Erreur chargement:', e);
@@ -9808,14 +10311,110 @@ function loadScheduleConfig() {
 }
 
 /**
- * Sauvegarde la configuration des horaires dans localStorage
+ * Sauvegarde la configuration des horaires dans Supabase/localStorage
  */
 function saveScheduleConfig() {
+    // Sauvegarder en localStorage (backup)
     try {
         localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(scheduleConfig));
-        console.log('[ScheduleConfig] Configuration sauvegardee');
+        console.log('[ScheduleConfig] Configuration sauvegardee localStorage');
     } catch (e) {
         console.error('[ScheduleConfig] Erreur sauvegarde:', e);
+    }
+
+    // Sauvegarder vers Supabase
+    if (supabaseClient) {
+        saveScheduleConfigToSupabase();
+    }
+}
+
+async function saveScheduleConfigToSupabase() {
+    if (!supabaseClient) return;
+
+    try {
+        // Sauvegarder shifts
+        for (const shift of scheduleConfig.shifts) {
+            await supabaseClient
+                .from('shifts')
+                .upsert({
+                    id: shift.id,
+                    name: shift.name,
+                    active: shift.active,
+                    days: shift.days,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'id' });
+
+            // Supprimer anciens schedules pour ce shift
+            await supabaseClient
+                .from('shift_schedules')
+                .delete()
+                .eq('shift_id', shift.id);
+
+            // Insérer nouveaux schedules
+            if (shift.schedules) {
+                for (const [dayName, schedule] of Object.entries(shift.schedules)) {
+                    await supabaseClient
+                        .from('shift_schedules')
+                        .insert({
+                            shift_id: shift.id,
+                            day_name: dayName,
+                            start_time: schedule.start,
+                            end_time: schedule.end
+                        });
+                }
+            }
+        }
+
+        // Sauvegarder breaks
+        for (const brk of scheduleConfig.breaks) {
+            await supabaseClient
+                .from('breaks')
+                .upsert({
+                    id: brk.id,
+                    name: brk.name,
+                    start_time: brk.start,
+                    end_time: brk.end,
+                    days: brk.days,
+                    active: brk.active,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'id' });
+        }
+
+        // Sauvegarder overtime config
+        if (scheduleConfig.overtime) {
+            // Supprimer et réinsérer
+            await supabaseClient.from('overtime_config').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+            const { data: otConfig } = await supabaseClient
+                .from('overtime_config')
+                .insert({
+                    enabled: scheduleConfig.overtime.enabled,
+                    max_daily_hours: scheduleConfig.overtime.maxDailyHours,
+                    max_weekly_hours: scheduleConfig.overtime.maxWeeklyHours
+                })
+                .select()
+                .single();
+
+            if (otConfig && scheduleConfig.overtime.slots) {
+                await supabaseClient.from('overtime_slots').delete().eq('overtime_config_id', otConfig.id);
+
+                for (const slot of scheduleConfig.overtime.slots) {
+                    await supabaseClient
+                        .from('overtime_slots')
+                        .insert({
+                            overtime_config_id: otConfig.id,
+                            days: slot.days,
+                            start_time: slot.start,
+                            end_time: slot.end,
+                            max_hours: slot.maxHours
+                        });
+                }
+            }
+        }
+
+        console.log('[ScheduleConfig] Configuration sauvegardée Supabase');
+    } catch (e) {
+        console.error('[ScheduleConfig] Erreur sauvegarde Supabase:', e);
     }
 }
 

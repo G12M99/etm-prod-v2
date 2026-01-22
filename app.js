@@ -5274,7 +5274,7 @@ class DataSyncManager {
                 if (op.slots && op.slots.length > 0) {
                     const slotsToInsert = op.slots.map(slot => ({
                         operation_id: opId,
-                        machine_id: slot.machine ? slot.machine.toLowerCase().replace(/\s+/g, '-') : null,
+                        machine_id: slot.machine ? slot.machine.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, '-') : null,
                         machine_name: slot.machine,
                         duree: slot.duree,
                         semaine: slot.semaine,

@@ -5105,28 +5105,8 @@ class DataSyncManager {
         this.startAutoSync();
     }
 
-    // Méthode 2: Chargement local (Supabase + localStorage fallback)
-    async loadLocalData() {
-        // Essayer Supabase d'abord
-        if (supabaseClient) {
-            try {
-                this.updateSyncIndicator('syncing', 'Chargement Supabase...');
-                const commandesData = await this.loadCommandesFromSupabase();
-                if (commandesData && commandesData.length > 0) {
-                    commandes = commandesData;
-                    console.log(`✅ Loaded ${commandes.length} orders from Supabase.`);
-                    this.updateSyncIndicator('synced', 'Supabase connecté');
-                    // Sauvegarder en localStorage comme backup
-                    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(commandes));
-                    refresh();
-                    return;
-                }
-            } catch (e) {
-                console.warn('⚠️ Supabase load failed, falling back to localStorage:', e);
-            }
-        }
-
-        // Fallback: localStorage
+    // Méthode 2: Chargement local (localStorage - Google Sheets est maître pour les commandes)
+    loadLocalData() {
         try {
             const stored = localStorage.getItem(this.STORAGE_KEY);
             if (stored) {
@@ -5142,20 +5122,15 @@ class DataSyncManager {
                         this.saveLocalData();
                         Toast.info('Noms de machines mis à jour');
                     }
-
-                    // Migrer vers Supabase si disponible
-                    if (supabaseClient && commandes.length > 0) {
-                        this.migrateToSupabase();
-                    }
                 }
             } else {
                 console.log('ℹ️ No local data found. Waiting for Google Sheets sync...');
-                commandes = []; // FIX: Juste un tableau vide
+                commandes = [];
                 this.updateSyncIndicator('syncing', 'En attente de sync...');
             }
         } catch (e) {
             console.error('❌ Error loading local data:', e);
-            commandes = []; // FIX: Tableau vide au lieu de loadLocalOrders()
+            commandes = [];
             this.updateSyncIndicator('error', 'Erreur chargement local');
         }
     }

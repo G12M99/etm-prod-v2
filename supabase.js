@@ -19,7 +19,7 @@ async function fetchCommandesFromSupabase() {
                 slots (*)
             )
         `)
-        .in('statut', ['En cours', 'Planifiée', 'En prépa'])
+        .in('statut', ['En cours', 'Planifiée', 'En prépa', 'Non placée'])
         .order('date_livraison', { ascending: true });
 
     if (error) {

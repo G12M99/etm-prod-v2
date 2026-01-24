@@ -6245,6 +6245,11 @@ function resolveSystemEventConflictsV2(event) {
 }
 
 function deleteSystemEvent(id) {
+    // Supprimer de Supabase d'abord
+    if (typeof deleteSystemEventFromSupabase === 'function') {
+        deleteSystemEventFromSupabase(id);
+    }
+
     systemEvents = systemEvents.filter(e => e.id !== id);
     saveSystemEvents(); // Use standalone save
     renderSystemEventsList();
@@ -9628,6 +9633,24 @@ async function init() {
         syncManager.saveLocalData();
     }
 
+    // ===== REALTIME SUBSCRIPTIONS =====
+    // Initialiser les subscriptions temps réel pour synchroniser entre utilisateurs
+    if (typeof initAllRealtimeSubscriptions === 'function' && supabaseClient) {
+        initAllRealtimeSubscriptions({
+            onCommandeChange: handleRealtimeCommandeChange,
+            onOperationChange: handleRealtimeOperationChange,
+            onSlotChange: handleRealtimeSlotChange,
+            onMachineChange: handleRealtimeMachineChange,
+            onSystemEventChange: handleRealtimeSystemEventChange,
+            onShiftChange: handleRealtimeScheduleChange,
+            onShiftScheduleChange: handleRealtimeScheduleChange,
+            onBreakChange: handleRealtimeScheduleChange,
+            onOvertimeConfigChange: handleRealtimeScheduleChange,
+            onOvertimeSlotsChange: handleRealtimeScheduleChange
+        });
+        console.log('📡 Realtime subscriptions initialisées');
+    }
+
     console.log(`✅ Commandes actives: ${getActiveOrders().length}/${commandes.length}`);
     console.log(`📦 Commandes placées: ${getPlacedOrders().length}`);
     console.log(`⏳ Commandes non placées: ${getUnplacedOrders().length}`);
@@ -9636,6 +9659,130 @@ async function init() {
     initializeSidebarSearch();
 
     console.log('✅ Application V2 initialisée avec sync hybride');
+}
+
+// ===================================
+// REALTIME HANDLERS - Gestion des changements temps réel
+// ===================================
+
+/**
+ * Sauvegarde les données (localStorage + Supabase)
+ * Appelée après chaque modification (drag & drop, etc.)
+ */
+function saveData() {
+    if (typeof syncManager !== 'undefined') {
+        syncManager.saveLocalData();
+    }
+}
+
+/**
+ * Handler pour les changements de commandes en temps réel
+ */
+function handleRealtimeCommandeChange(payload) {
+    console.log('🔄 Realtime commande:', payload.eventType);
+
+    // Recharger les données depuis Supabase
+    if (typeof syncManager !== 'undefined' && supabaseClient) {
+        syncManager.loadCommandesFromSupabase().then(data => {
+            if (data && data.length > 0) {
+                // Merger avec les données locales sans perdre les modifications en cours
+                mergeRealtimeCommandes(data);
+                refresh();
+            }
+        }).catch(err => console.error('Erreur reload commandes:', err));
+    }
+}
+
+/**
+ * Handler pour les changements d'opérations en temps réel
+ */
+function handleRealtimeOperationChange(payload) {
+    console.log('🔄 Realtime operation:', payload.eventType);
+    // Les opérations sont liées aux commandes, on recharge tout
+    handleRealtimeCommandeChange(payload);
+}
+
+/**
+ * Handler pour les changements de slots en temps réel
+ */
+function handleRealtimeSlotChange(payload) {
+    console.log('🔄 Realtime slot:', payload.eventType);
+    // Les slots sont liés aux opérations, on recharge tout
+    handleRealtimeCommandeChange(payload);
+}
+
+/**
+ * Handler pour les changements de machines en temps réel
+ */
+function handleRealtimeMachineChange(payload) {
+    console.log('🔄 Realtime machine:', payload.eventType);
+
+    // Recharger la config des machines
+    loadMachinesConfig().then(() => {
+        renderMachinesManager();
+        refresh();
+        Toast.info('Configuration machines mise à jour');
+    }).catch(err => console.error('Erreur reload machines:', err));
+}
+
+/**
+ * Handler pour les changements d'événements système en temps réel
+ */
+function handleRealtimeSystemEventChange(payload) {
+    console.log('🔄 Realtime system event:', payload.eventType);
+
+    // Recharger les événements système
+    loadSystemEvents().then(() => {
+        renderSystemEventsList();
+        refresh();
+        Toast.info('Événements système mis à jour');
+    }).catch(err => console.error('Erreur reload system events:', err));
+}
+
+/**
+ * Handler pour les changements de configuration horaires en temps réel
+ */
+function handleRealtimeScheduleChange(payload) {
+    console.log('🔄 Realtime schedule:', payload.eventType);
+
+    // Recharger la config des horaires
+    loadScheduleConfig().then(() => {
+        renderScheduleManager();
+        refresh();
+        Toast.info('Configuration horaires mise à jour');
+    }).catch(err => console.error('Erreur reload schedule:', err));
+}
+
+/**
+ * Merge les données Realtime avec les données locales
+ * Évite de perdre les modifications en cours de l'utilisateur
+ */
+function mergeRealtimeCommandes(remoteData) {
+    const localIds = new Set(commandes.map(c => c.id));
+    const remoteIds = new Set(remoteData.map(c => c.id));
+
+    // Ajouter les nouvelles commandes
+    remoteData.forEach(remoteCmd => {
+        if (!localIds.has(remoteCmd.id)) {
+            commandes.push(remoteCmd);
+        } else {
+            // Mettre à jour les commandes existantes (sauf si en cours de modification)
+            const localIndex = commandes.findIndex(c => c.id === remoteCmd.id);
+            if (localIndex !== -1) {
+                // Préserver les slots locaux si plus récents
+                const localCmd = commandes[localIndex];
+                const localHasSlots = localCmd.operations?.some(op => op.slots?.length > 0);
+                const remoteHasSlots = remoteCmd.operations?.some(op => op.slots?.length > 0);
+
+                if (remoteHasSlots || !localHasSlots) {
+                    commandes[localIndex] = remoteCmd;
+                }
+            }
+        }
+    });
+
+    // Supprimer les commandes qui n'existent plus côté remote
+    commandes = commandes.filter(c => remoteIds.has(c.id) || !c.id);
 }
 
 // Start the application when DOM is ready
@@ -10009,6 +10156,11 @@ function deleteMachine() {
     const index = machines.findIndex(m => m.id === machineId);
 
     if (index !== -1) {
+        // Supprimer de Supabase d'abord
+        if (typeof deleteMachineFromSupabase === 'function') {
+            deleteMachineFromSupabase(machineId);
+        }
+
         machines.splice(index, 1);
 
         // Désaffecter les opérations de cette machine

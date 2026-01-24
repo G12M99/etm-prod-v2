@@ -431,7 +431,7 @@ function subscribeToTable(tableName, callback) {
         .on('postgres_changes',
             { event: '*', schema: 'public', table: tableName },
             (payload) => {
-                console.log(`📥 ${tableName}:`, payload.eventType, payload.new?.id || payload.old?.id || '');
+                // Log minimal (pas de spam)
                 callback(payload);
             }
         )

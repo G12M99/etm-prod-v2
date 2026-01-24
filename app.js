@@ -9669,88 +9669,124 @@ async function init() {
  * Sauvegarde les données (localStorage + Supabase)
  * Appelée après chaque modification (drag & drop, etc.)
  */
+let _isSaving = false;
 function saveData() {
     if (typeof syncManager !== 'undefined') {
+        _isSaving = true;
         syncManager.saveLocalData();
+        // Reset après le debounce de sauvegarde (3s)
+        setTimeout(() => { _isSaving = false; }, 3000);
     }
+}
+
+/**
+ * Debounce pour les handlers Realtime
+ * Évite de recharger trop souvent et crée des boucles
+ */
+let _realtimeDebounceTimer = null;
+let _realtimePendingRefresh = false;
+
+function debouncedRealtimeRefresh() {
+    // Si on est en train de sauvegarder, ignorer (évite la boucle)
+    if (_isSaving) {
+        return;
+    }
+
+    _realtimePendingRefresh = true;
+
+    if (_realtimeDebounceTimer) {
+        clearTimeout(_realtimeDebounceTimer);
+    }
+
+    // Attendre 3s d'inactivité avant de recharger
+    _realtimeDebounceTimer = setTimeout(() => {
+        if (_realtimePendingRefresh && !_isSaving) {
+            console.log('🔄 Realtime: rechargement des données...');
+            _realtimePendingRefresh = false;
+
+            if (typeof syncManager !== 'undefined' && supabaseClient) {
+                syncManager.loadCommandesFromSupabase().then(data => {
+                    if (data && data.length > 0) {
+                        mergeRealtimeCommandes(data);
+                        refresh();
+                        console.log('✅ Données synchronisées depuis Supabase');
+                    }
+                }).catch(err => console.error('Erreur reload commandes:', err));
+            }
+        }
+    }, 3000);
 }
 
 /**
  * Handler pour les changements de commandes en temps réel
  */
 function handleRealtimeCommandeChange(payload) {
-    console.log('🔄 Realtime commande:', payload.eventType);
-
-    // Recharger les données depuis Supabase
-    if (typeof syncManager !== 'undefined' && supabaseClient) {
-        syncManager.loadCommandesFromSupabase().then(data => {
-            if (data && data.length > 0) {
-                // Merger avec les données locales sans perdre les modifications en cours
-                mergeRealtimeCommandes(data);
-                refresh();
-            }
-        }).catch(err => console.error('Erreur reload commandes:', err));
-    }
+    debouncedRealtimeRefresh();
 }
 
 /**
  * Handler pour les changements d'opérations en temps réel
  */
 function handleRealtimeOperationChange(payload) {
-    console.log('🔄 Realtime operation:', payload.eventType);
-    // Les opérations sont liées aux commandes, on recharge tout
-    handleRealtimeCommandeChange(payload);
+    debouncedRealtimeRefresh();
 }
 
 /**
  * Handler pour les changements de slots en temps réel
  */
 function handleRealtimeSlotChange(payload) {
-    console.log('🔄 Realtime slot:', payload.eventType);
-    // Les slots sont liés aux opérations, on recharge tout
-    handleRealtimeCommandeChange(payload);
+    debouncedRealtimeRefresh();
 }
 
 /**
  * Handler pour les changements de machines en temps réel
  */
+let _machineDebounceTimer = null;
 function handleRealtimeMachineChange(payload) {
-    console.log('🔄 Realtime machine:', payload.eventType);
+    if (_isSaving) return;
 
-    // Recharger la config des machines
-    loadMachinesConfig().then(() => {
-        renderMachinesManager();
-        refresh();
-        Toast.info('Configuration machines mise à jour');
-    }).catch(err => console.error('Erreur reload machines:', err));
+    if (_machineDebounceTimer) clearTimeout(_machineDebounceTimer);
+    _machineDebounceTimer = setTimeout(() => {
+        console.log('🔄 Realtime: rechargement machines...');
+        loadMachinesConfig().then(() => {
+            renderMachinesManager();
+            refresh();
+        }).catch(err => console.error('Erreur reload machines:', err));
+    }, 2000);
 }
 
 /**
  * Handler pour les changements d'événements système en temps réel
  */
+let _sysEventDebounceTimer = null;
 function handleRealtimeSystemEventChange(payload) {
-    console.log('🔄 Realtime system event:', payload.eventType);
+    if (_isSaving) return;
 
-    // Recharger les événements système
-    loadSystemEvents().then(() => {
-        renderSystemEventsList();
-        refresh();
-        Toast.info('Événements système mis à jour');
-    }).catch(err => console.error('Erreur reload system events:', err));
+    if (_sysEventDebounceTimer) clearTimeout(_sysEventDebounceTimer);
+    _sysEventDebounceTimer = setTimeout(() => {
+        console.log('🔄 Realtime: rechargement événements système...');
+        loadSystemEvents().then(() => {
+            renderSystemEventsList();
+            refresh();
+        }).catch(err => console.error('Erreur reload system events:', err));
+    }, 2000);
 }
 
 /**
  * Handler pour les changements de configuration horaires en temps réel
  */
+let _scheduleDebounceTimer = null;
 function handleRealtimeScheduleChange(payload) {
-    console.log('🔄 Realtime schedule:', payload.eventType);
+    if (_isSaving) return;
 
-    // Recharger la config des horaires
-    loadScheduleConfig().then(() => {
-        renderScheduleManager();
-        refresh();
-        Toast.info('Configuration horaires mise à jour');
-    }).catch(err => console.error('Erreur reload schedule:', err));
+    if (_scheduleDebounceTimer) clearTimeout(_scheduleDebounceTimer);
+    _scheduleDebounceTimer = setTimeout(() => {
+        console.log('🔄 Realtime: rechargement config horaires...');
+        loadScheduleConfig().then(() => {
+            renderScheduleManager();
+            refresh();
+        }).catch(err => console.error('Erreur reload schedule:', err));
+    }, 2000);
 }
 
 /**

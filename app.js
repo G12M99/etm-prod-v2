@@ -17,6 +17,29 @@ const SUPABASE_URL = 'https://veyqcnoaiqotikpjfgjq.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_wa6y4sYvbvKtzSFBzw7lBg_CYdxXr1P';
 let supabaseClient = null;
 
+// Client ID unique par session (pour éviter les boucles Realtime)
+const CLIENT_SESSION_ID = sessionStorage.getItem('etm_client_id') || (() => {
+    const id = 'client_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    sessionStorage.setItem('etm_client_id', id);
+    return id;
+})();
+
+// Tracking des modifications récentes (pour ignorer nos propres events Realtime)
+const _recentlyModifiedRecords = new Map(); // recordId -> timestamp
+const REALTIME_IGNORE_WINDOW_MS = 5000; // Ignorer les events dans les 5s suivant notre modif
+
+function markRecordAsModified(recordId) {
+    _recentlyModifiedRecords.set(recordId, Date.now());
+    // Nettoyage automatique après le délai
+    setTimeout(() => _recentlyModifiedRecords.delete(recordId), REALTIME_IGNORE_WINDOW_MS + 1000);
+}
+
+function isOurOwnRealtimeEvent(recordId) {
+    const modifiedAt = _recentlyModifiedRecords.get(recordId);
+    if (!modifiedAt) return false;
+    return (Date.now() - modifiedAt) < REALTIME_IGNORE_WINDOW_MS;
+}
+
 // Initialiser Supabase (appelé au démarrage)
 function initSupabase() {
     try {
@@ -415,7 +438,7 @@ function timeToDecimalHours(timeStr) {
  * Parse CSV data and return array of rows - LEGACY (DISABLED)
  */
 function fetchAndParseCSV() {
-    console.warn('⚠️ CSV parsing disabled - Using Google Sheets only');
+    console.warn('⚠️ CSV parsing disabled - Using Supabase only');
     return [];
     
     /* LEGACY CODE - DISABLED
@@ -703,89 +726,10 @@ class HistoryManager {
 const historyManager = new HistoryManager();
 
 // ===================================
-// Data Loading
+// Data Loading (Supabase est la source primaire)
 // ===================================
 
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx6uqDI6D0yat_2f583fiuqG9H5jqDNWCY1rX9pWGWhd2_HhTCmnrmXmsaF9-eDEBEemA/exec';
 const SYNC_METADATA_KEY = 'etm_sync_metadata';
-
-/**
- * Fetch with retry and exponential backoff
- * @param {string} url - URL to fetch
- * @param {object} options - Fetch options
- * @param {number} maxRetries - Maximum number of retries (default: 3)
- * @param {number} baseDelay - Base delay in ms (default: 1000)
- * @returns {Promise<Response>}
- */
-async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 1000) {
-    let lastError;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout
-
-            const response = await fetch(url, {
-                ...options,
-                signal: controller.signal
-            });
-
-            clearTimeout(timeoutId);
-
-            if (response.ok) {
-                return response;
-            }
-
-            // Non-retryable status codes
-            if (response.status === 404 || response.status === 401 || response.status === 403) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            lastError = new Error(`HTTP ${response.status}`);
-
-        } catch (error) {
-            lastError = error;
-
-            if (error.name === 'AbortError' && attempt < maxRetries) {
-                console.log(`Attempt ${attempt + 1} timed out, retrying...`);
-            }
-        }
-
-        if (attempt < maxRetries) {
-            const delay = baseDelay * Math.pow(2, attempt); // 1s, 2s, 4s
-            console.log(`Retrying in ${delay}ms... (attempt ${attempt + 2}/${maxRetries + 1})`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
-    }
-
-    throw lastError;
-}
-
-/**
- * @deprecated Remplacé par DataSyncManager.loadCommandesFromSupabase()
- * Google Sheets → Supabase est maintenant géré par le Google Apps Script externe.
- * Cette fonction est conservée uniquement pour compatibilité legacy.
- */
-async function fetchOrdersFromGoogleSheet(forceRefresh = false) {
-    console.warn('⚠️ fetchOrdersFromGoogleSheet() est DEPRECATED - utiliser Supabase via DataSyncManager');
-    return null;
-}
-
-/**
- * @deprecated Load orders from local CSV - Supabase est maintenant la source primaire
- */
-function loadLocalOrders() {
-    console.warn('⚠️ loadLocalOrders() deprecated - utiliser Supabase');
-    commandes = [];
-}
-
-/**
- * @deprecated Main load function - utiliser syncManager.init() à la place
- * Conservé pour compatibilité uniquement
- */
-function loadOrders() {
-    console.warn('⚠️ loadOrders() deprecated - données chargées via syncManager.init()');
-}
 
 // ===================================
 // Legacy Demo Data (kept for reference)
@@ -5084,7 +5028,7 @@ class DataSyncManager {
         this.updateSyncIndicator('offline', 'Mode hors ligne');
     }
 
-    // Méthode 2: Chargement local (localStorage - Google Sheets est maître pour les commandes)
+    // Méthode 2: Chargement local (localStorage - backup/fallback)
     loadLocalData() {
         try {
             const stored = localStorage.getItem(this.STORAGE_KEY);
@@ -5103,7 +5047,7 @@ class DataSyncManager {
                     }
                 }
             } else {
-                console.log('ℹ️ No local data found. Waiting for Google Sheets sync...');
+                console.log('ℹ️ No local data found. Waiting for Supabase sync...');
                 commandes = [];
                 this.updateSyncIndicator('syncing', 'En attente de sync...');
             }
@@ -5223,6 +5167,7 @@ class DataSyncManager {
             }, { onConflict: 'id' });
 
         if (cmdError) throw cmdError;
+        markRecordAsModified(cmd.id); // Marquer pour ignorer notre propre event Realtime
 
         // 2. Upsert opérations et slots (avec IDs stables, sans DELETE préalable)
         if (cmd.operations && cmd.operations.length > 0) {
@@ -5251,6 +5196,7 @@ class DataSyncManager {
                     }, { onConflict: 'id' });
 
                 if (opError) throw opError;
+                markRecordAsModified(opId); // Marquer pour ignorer notre propre event Realtime
 
                 // 3. Upsert slots avec IDs stables
                 if (op.slots && op.slots.length > 0) {
@@ -5278,6 +5224,8 @@ class DataSyncManager {
                             .upsert(slotsToUpsert, { onConflict: 'id' });
 
                         if (slotError) throw slotError;
+                        // Marquer tous les slots pour ignorer nos propres events Realtime
+                        slotsToUpsert.forEach(s => markRecordAsModified(s.id));
                     }
                 }
             }
@@ -5295,6 +5243,7 @@ class DataSyncManager {
                 .eq('id', slotId);
 
             if (error) throw error;
+            markRecordAsModified(slotId); // Marquer pour ignorer notre propre event Realtime
             console.log(`🗑️ Slot ${slotId} supprimé de Supabase`);
         } catch (e) {
             console.error('❌ Erreur suppression slot Supabase:', e);
@@ -5312,6 +5261,7 @@ class DataSyncManager {
                 .eq('operation_id', operationId);
 
             if (error) throw error;
+            markRecordAsModified(operationId); // Marquer l'opération pour ignorer les events de ses slots
             console.log(`🗑️ Tous les slots de ${operationId} supprimés de Supabase`);
         } catch (e) {
             console.error('❌ Erreur suppression slots Supabase:', e);
@@ -9653,11 +9603,11 @@ async function init() {
         if (typeof syncManager !== 'undefined') {
             await syncManager.init();
         } else {
-            console.error("Critical: syncManager is not defined");
-            loadOrders(); // Ultra-fallback
+            console.error("❌ Critical: syncManager is not defined");
+            Toast.error('Erreur critique: gestionnaire de sync non initialisé');
         }
     } catch (e) {
-        console.error("Critical: Sync Manager Init failed", e);
+        console.error("❌ Critical: Sync Manager Init failed", e);
         if (typeof syncManager !== 'undefined') syncManager.loadLocalData();
     }
 
@@ -9754,21 +9704,231 @@ function debouncedRealtimeRefresh() {
  * Handler pour les changements de commandes en temps réel
  */
 function handleRealtimeCommandeChange(payload) {
-    debouncedRealtimeRefresh();
+    // Ignorer nos propres modifications
+    const recordId = payload?.new?.id || payload?.old?.id;
+    if (recordId && isOurOwnRealtimeEvent(recordId)) {
+        console.log(`🔇 Realtime ignoré (notre modif): commande ${recordId}`);
+        return;
+    }
+
+    const eventType = payload.eventType;
+    console.log(`📡 Realtime commande: ${eventType} ${recordId}`);
+
+    switch (eventType) {
+        case 'INSERT': {
+            const newCmd = mapSupabaseCommandeToLocal(payload.new);
+            // Vérifier si n'existe pas déjà
+            if (!commandes.find(c => c.id === newCmd.id)) {
+                commandes.push(newCmd);
+                console.log(`➕ Commande ${newCmd.id} ajoutée`);
+            }
+            break;
+        }
+        case 'UPDATE': {
+            const cmd = commandes.find(c => c.id === recordId);
+            if (cmd) {
+                // Mettre à jour seulement les champs de base (pas les operations/slots)
+                cmd.client = payload.new.client_name;
+                cmd.dateLivraison = payload.new.date_livraison;
+                cmd.statut = payload.new.statut;
+                cmd.materiau = payload.new.materiau;
+                cmd.poids = parseFloat(payload.new.poids) || 0;
+                cmd.refCdeClient = payload.new.ref_cde_client;
+                cmd.ressource = payload.new.ressource;
+                cmd.semaineAffectee = payload.new.semaine_affectee;
+                console.log(`✏️ Commande ${recordId} mise à jour`);
+            }
+            break;
+        }
+        case 'DELETE': {
+            const idx = commandes.findIndex(c => c.id === recordId);
+            if (idx !== -1) {
+                commandes.splice(idx, 1);
+                console.log(`🗑️ Commande ${recordId} supprimée`);
+            }
+            break;
+        }
+    }
+
+    refresh();
+    if (typeof syncManager !== 'undefined') syncManager.saveLocalData();
+}
+
+/**
+ * Convertit une commande Supabase en format local
+ */
+function mapSupabaseCommandeToLocal(cmd) {
+    return {
+        id: cmd.id,
+        client: cmd.client_name,
+        dateLivraison: cmd.date_livraison,
+        statut: cmd.statut,
+        materiau: cmd.materiau,
+        poids: parseFloat(cmd.poids) || 0,
+        refCdeClient: cmd.ref_cde_client,
+        ressource: cmd.ressource,
+        semaineAffectee: cmd.semaine_affectee,
+        operations: [] // Les opérations arrivent séparément
+    };
 }
 
 /**
  * Handler pour les changements d'opérations en temps réel
  */
 function handleRealtimeOperationChange(payload) {
-    debouncedRealtimeRefresh();
+    // Ignorer nos propres modifications
+    const recordId = payload?.new?.id || payload?.old?.id;
+    if (recordId && isOurOwnRealtimeEvent(recordId)) {
+        console.log(`🔇 Realtime ignoré (notre modif): operation ${recordId}`);
+        return;
+    }
+
+    const eventType = payload.eventType;
+    const commandeId = payload?.new?.commande_id || payload?.old?.commande_id;
+    console.log(`📡 Realtime operation: ${eventType} ${recordId} (cmd: ${commandeId})`);
+
+    const cmd = commandes.find(c => c.id === commandeId);
+    if (!cmd) {
+        console.warn(`⚠️ Commande ${commandeId} non trouvée pour operation ${recordId}`);
+        return;
+    }
+
+    if (!cmd.operations) cmd.operations = [];
+
+    switch (eventType) {
+        case 'INSERT': {
+            if (!cmd.operations.find(op => op.id === recordId)) {
+                cmd.operations.push(mapSupabaseOperationToLocal(payload.new));
+                console.log(`➕ Operation ${recordId} ajoutée à ${commandeId}`);
+            }
+            break;
+        }
+        case 'UPDATE': {
+            const op = cmd.operations.find(o => o.id === recordId);
+            if (op) {
+                op.type = payload.new.type;
+                op.dureeTotal = parseFloat(payload.new.duree_total) || 0;
+                op.dureeOriginal = parseFloat(payload.new.duree_original) || 0;
+                op.dureeOverride = payload.new.duree_override ? parseFloat(payload.new.duree_override) : null;
+                op.overrideTimestamp = payload.new.override_timestamp;
+                op.progressionReelle = parseFloat(payload.new.progression_reelle) || 0;
+                op.statut = payload.new.statut;
+                console.log(`✏️ Operation ${recordId} mise à jour`);
+            }
+            break;
+        }
+        case 'DELETE': {
+            const idx = cmd.operations.findIndex(o => o.id === recordId);
+            if (idx !== -1) {
+                cmd.operations.splice(idx, 1);
+                console.log(`🗑️ Operation ${recordId} supprimée`);
+            }
+            break;
+        }
+    }
+
+    refresh();
+    if (typeof syncManager !== 'undefined') syncManager.saveLocalData();
+}
+
+/**
+ * Convertit une opération Supabase en format local
+ */
+function mapSupabaseOperationToLocal(op) {
+    return {
+        id: op.id,
+        type: op.type,
+        dureeTotal: parseFloat(op.duree_total) || 0,
+        dureeOriginal: parseFloat(op.duree_original) || 0,
+        dureeOverride: op.duree_override ? parseFloat(op.duree_override) : null,
+        overrideTimestamp: op.override_timestamp,
+        progressionReelle: parseFloat(op.progression_reelle) || 0,
+        statut: op.statut,
+        slots: [] // Les slots arrivent séparément
+    };
 }
 
 /**
  * Handler pour les changements de slots en temps réel
  */
 function handleRealtimeSlotChange(payload) {
-    debouncedRealtimeRefresh();
+    // Ignorer nos propres modifications
+    const recordId = payload?.new?.id || payload?.old?.id;
+    const operationId = payload?.new?.operation_id || payload?.old?.operation_id;
+
+    if (recordId && isOurOwnRealtimeEvent(recordId)) {
+        console.log(`🔇 Realtime ignoré (notre modif): slot ${recordId}`);
+        return;
+    }
+    if (operationId && isOurOwnRealtimeEvent(operationId)) {
+        console.log(`🔇 Realtime ignoré (notre modif via operation): slot ${recordId}`);
+        return;
+    }
+
+    const eventType = payload.eventType;
+    console.log(`📡 Realtime slot: ${eventType} ${recordId} (op: ${operationId})`);
+
+    // Trouver l'opération parente
+    let targetOp = null;
+    for (const cmd of commandes) {
+        if (!cmd.operations) continue;
+        targetOp = cmd.operations.find(op => op.id === operationId);
+        if (targetOp) break;
+    }
+
+    if (!targetOp) {
+        console.warn(`⚠️ Operation ${operationId} non trouvée pour slot ${recordId}`);
+        return;
+    }
+
+    if (!targetOp.slots) targetOp.slots = [];
+
+    switch (eventType) {
+        case 'INSERT': {
+            if (!targetOp.slots.find(s => s.id === recordId)) {
+                targetOp.slots.push(mapSupabaseSlotToLocal(payload.new));
+                console.log(`➕ Slot ${recordId} ajouté à ${operationId}`);
+            }
+            break;
+        }
+        case 'UPDATE': {
+            const slot = targetOp.slots.find(s => s.id === recordId);
+            if (slot) {
+                Object.assign(slot, mapSupabaseSlotToLocal(payload.new));
+                console.log(`✏️ Slot ${recordId} mis à jour`);
+            }
+            break;
+        }
+        case 'DELETE': {
+            const idx = targetOp.slots.findIndex(s => s.id === recordId);
+            if (idx !== -1) {
+                targetOp.slots.splice(idx, 1);
+                console.log(`🗑️ Slot ${recordId} supprimé`);
+            }
+            break;
+        }
+    }
+
+    refresh();
+    if (typeof syncManager !== 'undefined') syncManager.saveLocalData();
+}
+
+/**
+ * Convertit un slot Supabase en format local
+ */
+function mapSupabaseSlotToLocal(slot) {
+    return {
+        id: slot.id,
+        machine: slot.machine_name,
+        duree: parseFloat(slot.duree) || 0,
+        semaine: slot.semaine,
+        jour: slot.jour,
+        heureDebut: slot.heure_debut,
+        heureFin: slot.heure_fin,
+        dateDebut: slot.date_debut,
+        dateFin: slot.date_fin,
+        overtime: slot.overtime || false
+    };
 }
 
 /**

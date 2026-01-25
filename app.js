@@ -1358,6 +1358,11 @@ function getCommandesAffecteesNonPlacees(semaine, annee) {
         // Exclure les terminées/livrées
         if (cmd.statut === 'Terminée' || cmd.statut === 'Livrée') return false;
 
+        // Si pas d'opérations, considérer comme "à placer" (bug sync Supabase)
+        if (!cmd.operations || cmd.operations.length === 0) {
+            return true;
+        }
+
         // Doit avoir AU MOINS UNE opération non placée
         return cmd.operations.some(op => !op.slots || op.slots.length === 0);
     });

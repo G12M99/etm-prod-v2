@@ -100,10 +100,10 @@ function syncIfChanged() {
         ref_cde_client: row[COL.REF_CLIENT] ? row[COL.REF_CLIENT].toString().trim() : null
       });
       
-      // Préparer les opérations
-      const dureeCisaille = parseFloat(row[COL.CISAILLE].toString().replace(',', '.')) || 0;
-      const dureePoincon = parseFloat(row[COL.POINCON].toString().replace(',', '.')) || 0;
-      const dureePliage = parseFloat(row[COL.PLIAGE].toString().replace(',', '.')) || 0;
+      // Préparer les opérations (conversion HH:MM:SS → heures décimales)
+      const dureeCisaille = timeToDecimalHours(row[COL.CISAILLE]);
+      const dureePoincon = timeToDecimalHours(row[COL.POINCON]);
+      const dureePliage = timeToDecimalHours(row[COL.PLIAGE]);
       
       if (dureeCisaille > 0) {
         operationsToSync.push({
@@ -153,7 +153,8 @@ function syncIfChanged() {
     console.log('Commandes: ' + resCommandes);
     
     if (operationsToSync.length > 0) {
-      const resOps = batchUpsert('operations', operationsToSync);
+      // SMART SYNC: préserve statut, progression, etc. des opérations existantes
+      const resOps = smartSyncOperations(operationsToSync);
       console.log('Opérations: ' + resOps);
     }
     
@@ -224,6 +225,29 @@ function normalizeStatut(statut) {
   return STATUT_MAP[normalized] || 'En cours';
 }
 
+/**
+ * Convertit une durée HH:MM:SS ou décimale en heures décimales
+ * @param {*} value - Valeur de la cellule (HH:MM:SS, HH:MM, ou nombre décimal)
+ * @returns {number} Durée en heures décimales
+ */
+function timeToDecimalHours(value) {
+  if (!value) return 0;
+
+  const str = value.toString().trim();
+
+  // Format HH:MM:SS ou HH:MM
+  if (str.includes(':')) {
+    const parts = str.split(':');
+    const hours = parseInt(parts[0]) || 0;
+    const minutes = parseInt(parts[1]) || 0;
+    const seconds = parts[2] ? parseInt(parts[2]) || 0 : 0;
+    return hours + (minutes / 60) + (seconds / 3600);
+  }
+
+  // Fallback: nombre décimal (1.5 ou 1,5)
+  return parseFloat(str.replace(',', '.')) || 0;
+}
+
 // =====================================================
 // BATCH UPSERT
 // =====================================================
@@ -233,7 +257,7 @@ function normalizeStatut(statut) {
  */
 function batchUpsert(table, data) {
   if (!data || data.length === 0) return 'skip';
-  
+
   const response = UrlFetchApp.fetch(SUPABASE_URL + '/rest/v1/' + table, {
     method: 'POST',
     headers: {
@@ -245,14 +269,109 @@ function batchUpsert(table, data) {
     payload: JSON.stringify(data),
     muteHttpExceptions: true
   });
-  
+
   const code = response.getResponseCode();
   if (code !== 200 && code !== 201) {
     console.error('Erreur ' + table + ': ' + response.getContentText());
     return 'erreur ' + code;
   }
-  
+
   return 'ok (' + data.length + ')';
+}
+
+/**
+ * Récupère TOUS les IDs des opérations existantes dans Supabase
+ * @returns {Set<string>} Set des IDs existants
+ */
+function getAllExistingOperationIds() {
+  const allIds = new Set();
+  let offset = 0;
+  const limit = 1000;
+
+  while (true) {
+    const url = SUPABASE_URL + '/rest/v1/operations?select=id&limit=' + limit + '&offset=' + offset;
+
+    const response = UrlFetchApp.fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_ANON_KEY
+      },
+      muteHttpExceptions: true
+    });
+
+    const code = response.getResponseCode();
+    if (code !== 200) {
+      console.error('Erreur lecture operations: ' + response.getContentText());
+      break;
+    }
+
+    const ops = JSON.parse(response.getContentText());
+    if (ops.length === 0) break;
+
+    for (const op of ops) {
+      allIds.add(op.id);
+    }
+
+    if (ops.length < limit) break;
+    offset += limit;
+  }
+
+  console.log('Total opérations existantes dans Supabase: ' + allIds.size);
+  return allIds;
+}
+
+/**
+ * Sync intelligent des opérations - préserve les données locales
+ * - Nouvelles opérations : INSERT complet
+ * - Opérations existantes : UPDATE seulement duree_total et duree_original
+ * @param {Array} operations - Opérations à synchroniser
+ * @returns {string} Résultat de la sync
+ */
+function smartSyncOperations(operations) {
+  if (!operations || operations.length === 0) return 'skip';
+
+  // 1. Récupérer TOUS les IDs des opérations existantes (pagination automatique)
+  const existingIds = getAllExistingOperationIds();
+
+  console.log('Opérations à sync: ' + operations.length + ' | Existantes en DB: ' + existingIds.size);
+
+  // 2. Séparer nouvelles vs existantes
+  const newOperations = [];
+  const updateOperations = [];
+
+  for (const op of operations) {
+    if (existingIds.has(op.id)) {
+      // Opération existe → UPDATE seulement les durées
+      updateOperations.push({
+        id: op.id,
+        duree_total: op.duree_total,
+        duree_original: op.duree_original
+        // NE PAS inclure: statut, progression_reelle, duree_override, etc.
+      });
+    } else {
+      // Nouvelle opération → INSERT complet
+      newOperations.push(op);
+    }
+  }
+
+  let result = '';
+
+  // 3. INSERT nouvelles opérations
+  if (newOperations.length > 0) {
+    const resNew = batchUpsert('operations', newOperations);
+    result += 'new:' + resNew;
+    console.log('Nouvelles opérations: ' + newOperations.length);
+  }
+
+  // 4. UPDATE opérations existantes (seulement durées)
+  if (updateOperations.length > 0) {
+    const resUpdate = batchUpsert('operations', updateOperations);
+    result += (result ? ' | ' : '') + 'update:' + resUpdate;
+    console.log('Opérations mises à jour (durées): ' + updateOperations.length);
+  }
+
+  return result || 'nothing';
 }
 
 // =====================================================

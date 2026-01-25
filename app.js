@@ -3787,6 +3787,10 @@ function handleSidebarDrop(e) {
         // Retirer toutes les opérations
         cmd.operations.forEach(op => {
             if (op.slots && op.slots.length > 0) {
+                // Supprimer les slots de Supabase
+                if (op.id && supabaseClient) {
+                    syncManager.deleteAllSlotsForOperation(op.id);
+                }
                 op.slots = [];
                 op.statut = "Non placée";
                 op.progressionReelle = 0;
@@ -3799,6 +3803,10 @@ function handleSidebarDrop(e) {
             return;
         }
 
+        // Supprimer les slots de Supabase
+        if (operation.id && supabaseClient) {
+            syncManager.deleteAllSlotsForOperation(operation.id);
+        }
         operation.slots = [];
         operation.statut = "Non placée";
         operation.progressionReelle = 0;
@@ -5189,11 +5197,11 @@ class DataSyncManager {
         }
     }
 
-    // Insérer ou mettre à jour une commande dans Supabase
+    // Insérer ou mettre à jour une commande dans Supabase (avec IDs stables)
     async upsertCommandeToSupabase(cmd) {
         if (!supabaseClient) return;
 
-        // Upsert commande (convertir les chaînes vides en null pour Supabase)
+        // 1. Upsert commande
         const { error: cmdError } = await supabaseClient
             .from('commandes')
             .upsert({
@@ -5211,20 +5219,20 @@ class DataSyncManager {
 
         if (cmdError) throw cmdError;
 
-        // Supprimer anciennes opérations et slots pour cette commande
-        await supabaseClient
-            .from('operations')
-            .delete()
-            .eq('commande_id', cmd.id);
-
-        // Insérer opérations et slots
+        // 2. Upsert opérations et slots (avec IDs stables, sans DELETE préalable)
         if (cmd.operations && cmd.operations.length > 0) {
             for (const op of cmd.operations) {
-                const opId = crypto.randomUUID();
+                // Utiliser l'ID déterministe de l'opération
+                const opId = op.id;
+
+                if (!opId) {
+                    console.warn(`⚠️ Opération sans ID pour ${cmd.id}/${op.type}`);
+                    continue;
+                }
 
                 const { error: opError } = await supabaseClient
                     .from('operations')
-                    .insert({
+                    .upsert({
                         id: opId,
                         commande_id: cmd.id,
                         type: op.type,
@@ -5233,34 +5241,75 @@ class DataSyncManager {
                         duree_override: op.dureeOverride,
                         override_timestamp: op.overrideTimestamp,
                         progression_reelle: op.progressionReelle || 0,
-                        statut: op.statut || 'Non placée'
-                    });
+                        statut: op.statut || 'Non placée',
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
 
                 if (opError) throw opError;
 
-                // Insérer slots
+                // 3. Upsert slots avec IDs stables
                 if (op.slots && op.slots.length > 0) {
-                    const slotsToInsert = op.slots.map(slot => ({
-                        operation_id: opId,
-                        machine_id: slot.machine ? slot.machine.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, '-') : null,
-                        machine_name: slot.machine,
-                        duree: slot.duree,
-                        semaine: slot.semaine,
-                        jour: slot.jour,
-                        heure_debut: slot.heureDebut,
-                        heure_fin: slot.heureFin,
-                        date_debut: slot.dateDebut,
-                        date_fin: slot.dateFin,
-                        overtime: slot.overtime || false
-                    }));
+                    const slotsToUpsert = op.slots
+                        .filter(slot => slot.id)  // Ignorer les slots sans ID
+                        .map(slot => ({
+                            id: slot.id,
+                            operation_id: opId,
+                            machine_id: slot.machine ? slot.machine.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, '-') : null,
+                            machine_name: slot.machine,
+                            duree: slot.duree,
+                            semaine: slot.semaine,
+                            jour: slot.jour,
+                            heure_debut: slot.heureDebut,
+                            heure_fin: slot.heureFin,
+                            date_debut: slot.dateDebut,
+                            date_fin: slot.dateFin,
+                            overtime: slot.overtime || false,
+                            updated_at: new Date().toISOString()
+                        }));
 
-                    const { error: slotError } = await supabaseClient
-                        .from('slots')
-                        .insert(slotsToInsert);
+                    if (slotsToUpsert.length > 0) {
+                        const { error: slotError } = await supabaseClient
+                            .from('slots')
+                            .upsert(slotsToUpsert, { onConflict: 'id' });
 
-                    if (slotError) throw slotError;
+                        if (slotError) throw slotError;
+                    }
                 }
             }
+        }
+    }
+
+    // Supprimer un slot de Supabase
+    async deleteSlotFromSupabase(slotId) {
+        if (!supabaseClient || !slotId) return;
+
+        try {
+            const { error } = await supabaseClient
+                .from('slots')
+                .delete()
+                .eq('id', slotId);
+
+            if (error) throw error;
+            console.log(`🗑️ Slot ${slotId} supprimé de Supabase`);
+        } catch (e) {
+            console.error('❌ Erreur suppression slot Supabase:', e);
+        }
+    }
+
+    // Supprimer tous les slots d'une opération dans Supabase
+    async deleteAllSlotsForOperation(operationId) {
+        if (!supabaseClient || !operationId) return;
+
+        try {
+            const { error } = await supabaseClient
+                .from('slots')
+                .delete()
+                .eq('operation_id', operationId);
+
+            if (error) throw error;
+            console.log(`🗑️ Tous les slots de ${operationId} supprimés de Supabase`);
+        } catch (e) {
+            console.error('❌ Erreur suppression slots Supabase:', e);
         }
     }
 
@@ -6463,6 +6512,10 @@ function unplanCommand(commandeId) {
     if (!cmd) return;
 
     cmd.operations.forEach(op => {
+        // Supprimer les slots de Supabase
+        if (op.id && supabaseClient) {
+            syncManager.deleteAllSlotsForOperation(op.id);
+        }
         op.slots = [];
         op.statut = "Non placée";
         op.progressionReelle = 0;
@@ -9281,6 +9334,11 @@ function applyScenario(scenario, selectedOrder) {
             );
 
             if (oldSlotIndex !== -1) {
+                const removedSlot = operation.slots[oldSlotIndex];
+                // Supprimer de Supabase si ID existe
+                if (removedSlot.id && supabaseClient) {
+                    syncManager.deleteSlotFromSupabase(removedSlot.id);
+                }
                 operation.slots.splice(oldSlotIndex, 1);
             }
 

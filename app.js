@@ -359,6 +359,17 @@ function migrateCommandesSemaineAffectee() {
 // ===================================
 
 /**
+ * Génère un ID de slot déterministe basé sur l'opération + index
+ * @param {string} operationId - ID de l'opération (ex: CC26-0019_cisaillage)
+ * @param {Array} existingSlots - Slots déjà existants pour compter l'index
+ * @returns {string} - ID du slot (ex: CC26-0019_cisaillage_slot_1)
+ */
+function generateSlotId(operationId, existingSlots) {
+    const index = (existingSlots ? existingSlots.length : 0) + 1;
+    return `${operationId}_slot_${index}`;
+}
+
+/**
  * Convert HH:MM:SS time format (or Date object, or Excel serial number) to decimal hours
  */
 function timeToDecimalHours(timeStr) {
@@ -489,7 +500,15 @@ function mapGoogleSheetRowToOrder(row) {
 
         // Only add operation if duration > 0
         if (duration > 0) {
+            // ID déterministe basé sur orderId + type normalisé
+            const typeNormalized = opConfig.type.toLowerCase()
+                .replace('ç', 'c')
+                .replace('é', 'e')
+                .replace(/[^a-z]/g, '');
+            const operationId = `${order.id}_${typeNormalized}`;
+
             order.operations.push({
+                id: operationId,              // ID stable pour upsert Supabase
                 type: opConfig.type,
                 dureeTotal: duration,
                 dureeOriginal: duration,      // Temps original GSheet
@@ -533,7 +552,16 @@ function mapSheetRowToOrder(row) {
         if (!opType) continue;
 
         const dureeValue = timeToDecimalHours(row[`Op ${i} Durée`]);
+
+        // ID déterministe basé sur orderId + type normalisé
+        const typeNormalized = opType.toLowerCase()
+            .replace('ç', 'c')
+            .replace('é', 'e')
+            .replace(/[^a-z]/g, '');
+        const operationId = `${order.id}_${typeNormalized}`;
+
         const operation = {
+            id: operationId,                  // ID stable pour upsert Supabase
             type: opType,
             dureeTotal: dureeValue,
             dureeOriginal: dureeValue,        // Temps original GSheet
@@ -564,6 +592,7 @@ function mapSheetRowToOrder(row) {
                 const dateFin = getDateFromWeekDay(semaine, jour, heureFin);
 
                 operation.slots.push({
+                    id: generateSlotId(operation.id, operation.slots),
                     machine: machine,
                     duree: duree,
                     semaine: semaine,
@@ -733,122 +762,29 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 100
 }
 
 /**
- * Fetch orders from Google Apps Script
- * Returns the data instead of setting global state directly
- * @param {boolean} forceRefresh - Force bypass all caches
+ * @deprecated Remplacé par DataSyncManager.loadCommandesFromSupabase()
+ * Google Sheets → Supabase est maintenant géré par le Google Apps Script externe.
+ * Cette fonction est conservée uniquement pour compatibilité legacy.
  */
 async function fetchOrdersFromGoogleSheet(forceRefresh = false) {
-    if (GOOGLE_SCRIPT_URL === 'YOUR_GOOGLE_SCRIPT_URL_HERE') {
-        console.warn('⚠️ Google Script URL not set.');
-        throw new Error('URL not configured');
-    }
-
-    console.time('FetchGoogleSheet');
-    console.log(`📡 Fetching data from Google Sheet at ${new Date().toLocaleTimeString()}...`);
-
-    try {
-        // Get stored metadata for conditional fetching
-        const metadata = JSON.parse(localStorage.getItem(SYNC_METADATA_KEY) || '{}');
-        const lastModified = metadata.lastModified || null;
-
-        // Build URL with conditional parameters
-        const params = new URLSearchParams();
-        if (!forceRefresh && lastModified) {
-            params.append('since', lastModified); // Server checks if data changed
-        }
-        params.append('v', '2'); // API version for optimized sync
-
-        const url = `${GOOGLE_SCRIPT_URL}?${params.toString()}`;
-
-        // Use retry mechanism
-        const response = await fetchWithRetry(url);
-        console.timeEnd('FetchGoogleSheet');
-
-        // Read text first to debug if it's not JSON
-        const responseText = await response.text();
-
-        // Check if response is HTML (error page) instead of JSON
-        if (responseText.trim().startsWith('<')) {
-            console.error('❌ Google Script returned HTML instead of JSON.');
-            throw new Error('Invalid JSON response (HTML received)');
-        }
-
-        const jsonResponse = JSON.parse(responseText);
-
-        // Handle "unchanged" response from optimized server
-        if (jsonResponse.status === 'unchanged') {
-            console.log('✅ Data unchanged since last sync');
-            return null; // Signal no changes to SyncManager
-        }
-
-        // Update metadata with new lastModified timestamp
-        if (jsonResponse.lastModified) {
-            localStorage.setItem(SYNC_METADATA_KEY, JSON.stringify({
-                lastModified: jsonResponse.lastModified,
-                syncedAt: new Date().toISOString()
-            }));
-        }
-
-        // Handle different JSON structures (Array vs Object with data property)
-        let data = [];
-        if (Array.isArray(jsonResponse)) {
-            data = jsonResponse;
-        } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
-            data = jsonResponse.data;
-        } else if (jsonResponse.status === 'success' && jsonResponse.data) {
-            data = jsonResponse.data;
-        } else {
-            console.error('❌ Unexpected JSON structure:', Object.keys(jsonResponse));
-            throw new Error('JSON response does not contain an array of data');
-        }
-
-        console.log(`✅ Data fetched from Google Sheet: ${data.length} rows`);
-
-        const fetchedOrders = data
-            .map(row => mapGoogleSheetRowToOrder(row))
-            .filter(cmd => {
-                if (!cmd.statut) return false;
-
-                // Normalisation plus stricte pour comparaison
-                // Enlève les accents pour être sûr (prépa -> prepa)
-                const status = cmd.statut.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-
-                // Filtre permissif : si le mot clé est DEDANS, on prend
-                if (status.includes('cours')) return true;   // En cours, En-cours...
-                if (status.includes('prepa')) return true;   // En prépa, Préparation...
-                if (status.includes('planifi')) return true; // Planifiée, Planifié...
-
-                return false;
-            });
-
-        console.log(`✅ Orders fetched (Live): ${fetchedOrders.length} active orders`);
-
-        if (fetchedOrders.length === 0 && data.length > 0) {
-            console.warn("⚠️ Attention : 0 commande chargée alors que le Sheet contient des données. Vérifiez les statuts.");
-        }
-
-        return fetchedOrders;
-
-    } catch (error) {
-        console.error('❌ Error fetching from Google Sheet:', error);
-        throw error; // Re-throw for SyncManager
-    }
+    console.warn('⚠️ fetchOrdersFromGoogleSheet() est DEPRECATED - utiliser Supabase via DataSyncManager');
+    return null;
 }
 
 /**
- * Load orders from local CSV (Legacy/Fallback) - DISABLED
+ * @deprecated Load orders from local CSV - Supabase est maintenant la source primaire
  */
 function loadLocalOrders() {
-    console.log('⚠️ Local CSV fallback disabled - Using Google Sheets only');
+    console.warn('⚠️ loadLocalOrders() deprecated - utiliser Supabase');
     commandes = [];
 }
 
 /**
- * Main load function
+ * @deprecated Main load function - utiliser syncManager.init() à la place
+ * Conservé pour compatibilité uniquement
  */
 function loadOrders() {
-    // Attempt to fetch from web first
-    fetchOrdersFromGoogleSheet();
+    console.warn('⚠️ loadOrders() deprecated - données chargées via syncManager.init()');
 }
 
 // ===================================
@@ -3743,6 +3679,7 @@ function replanifierOperationsSuivantes(cmd, modifiedOp) {
                 
                 // Add slot
                 currentOp.slots.push({
+                    id: generateSlotId(currentOp.id, currentOp.slots),
                     machine: bestSlot.machine,
                     duree: placedDuration,
                     semaine: bestSlot.week,
@@ -4405,6 +4342,7 @@ async function handleDrop(e) {
 
         // Apply new slot
         operation.slots = [{
+            id: generateSlotId(operation.id, []),
             machine: targetMachine,
             duree: operation.dureeTotal,
             semaine: searchWeek,
@@ -4482,6 +4420,7 @@ async function handleDrop(e) {
                     const endDec = calculateEndTimeWithLunch(gapStartDec, operation.dureeTotal, searchDay);
 
                     operation.slots = [{
+                        id: generateSlotId(operation.id, []),
                         machine: targetMachine,
                         duree: operation.dureeTotal,
                         semaine: searchWeek,
@@ -4793,6 +4732,7 @@ async function placerAutomatiquement(commandeId) {
 
             // Place chunk
             operation.slots.push({
+                id: generateSlotId(operation.id, operation.slots),
                 machine: bestSlot.machine,
                 duree: placedDuration,
                 semaine: bestSlot.week,
@@ -5088,21 +5028,47 @@ class DataSyncManager {
         this.BACKUP_KEY = 'etm_commandes_backup';
     }
 
-    // Méthode 1: Initialisation
+    // Méthode 1: Initialisation - Supabase comme source primaire
     async init() {
-        // 1. Charger données locales (localStorage) IMMÉDIATEMENT
+        // 1. Essayer Supabase d'abord (source primaire)
+        if (supabaseClient) {
+            try {
+                this.updateSyncIndicator('syncing', 'Chargement Supabase...');
+                const supabaseData = await this.loadCommandesFromSupabase();
+
+                if (supabaseData && supabaseData.length > 0) {
+                    commandes = supabaseData;
+                    this.saveLocalData(); // Backup en localStorage
+                    this.updateSyncIndicator('synced', 'Supabase');
+                    refresh();
+                    console.log(`✅ ${commandes.length} commandes chargées depuis Supabase`);
+
+                    // Migration des noms de machines si nécessaire
+                    if (migrateMachineNames()) {
+                        this.saveLocalData();
+                    }
+
+                    // Démarrer auto-sync Supabase (Realtime fait le reste)
+                    this.startAutoSyncSupabase();
+                    return;
+                } else {
+                    console.log('ℹ️ Supabase vide, fallback localStorage');
+                }
+            } catch (e) {
+                console.warn('⚠️ Supabase indisponible:', e.message);
+            }
+        }
+
+        // 2. Fallback localStorage si Supabase échoue ou est vide
+        console.log('📦 Fallback: chargement localStorage');
         this.loadLocalData();
 
-        // 1.5 Migrer les données existantes (ajout champs override)
+        // Migration données si nécessaire
         if (migrateOperationOverrideFields()) {
             this.saveLocalData();
         }
 
-        // 2. Tenter sync Google Sheets en arrière-plan (SANS AWAIT pour ne pas bloquer l'UI)
-        this.syncWithGoogleSheets();
-
-        // 3. Démarrer auto-sync périodique (toutes les 5 minutes)
-        this.startAutoSync();
+        this.updateSyncIndicator('offline', 'Mode hors ligne');
     }
 
     // Méthode 2: Chargement local (localStorage - Google Sheets est maître pour les commandes)
@@ -5166,6 +5132,7 @@ class DataSyncManager {
                     const opSlots = (slotsData || [])
                         .filter(slot => slot.operation_id === op.id)
                         .map(slot => ({
+                            id: slot.id,  // ID stable pour upsert
                             machine: slot.machine_name,
                             duree: parseFloat(slot.duree),
                             semaine: slot.semaine,
@@ -5177,6 +5144,7 @@ class DataSyncManager {
                             overtime: slot.overtime
                         }));
                     return {
+                        id: op.id,  // ID stable pour upsert
                         type: op.type,
                         dureeTotal: parseFloat(op.duree_total),
                         dureeOriginal: parseFloat(op.duree_original),
@@ -5331,45 +5299,43 @@ class DataSyncManager {
         saveSystemEvents();
     }
 
-    // Méthode 3: Sync avec Google Sheets
-    async syncWithGoogleSheets(forceRefresh = false) {
+    // Méthode 3: Sync avec Supabase (source primaire)
+    async syncWithSupabase() {
+        if (!supabaseClient) {
+            this.updateSyncIndicator('offline', 'Supabase non disponible');
+            return;
+        }
+
         this.updateSyncIndicator('syncing', 'Synchronisation...');
 
         try {
-            const remoteData = await fetchOrdersFromGoogleSheet(forceRefresh);
-
-            // Handle "unchanged" response (null means no changes)
-            if (remoteData === null) {
-                this.updateSyncIndicator('synced', 'À jour');
-                this.lastSyncTime = new Date();
-                console.log('✅ Sync complete - no changes detected');
-                return;
-            }
+            const remoteData = await this.loadCommandesFromSupabase();
 
             if (remoteData && remoteData.length > 0) {
-                // Merge logic
+                // Merge logic - Supabase est maintenant la source de vérité
                 this.mergeData(commandes, remoteData);
 
                 this.saveLocalData();
                 this.updateSyncIndicator('synced', 'Synchronisé');
                 this.lastSyncTime = new Date();
                 refresh();
-                Toast.success('Données synchronisées avec succès');
+                console.log('✅ Sync Supabase terminée');
             } else {
-                throw new Error('No data received');
+                this.updateSyncIndicator('synced', 'À jour (vide)');
+                console.log('ℹ️ Supabase: aucune commande active');
             }
         } catch (error) {
-            console.error('Sync failed:', error);
-            this.updateSyncIndicator('error', 'Erreur Sync (Mode Hors ligne)');
-            Toast.warning('Synchronisation échouée. Mode hors ligne activé.');
+            console.error('❌ Sync Supabase failed:', error);
+            this.updateSyncIndicator('error', 'Erreur Sync');
+            Toast.warning('Synchronisation échouée. Mode hors ligne.');
         }
     }
 
-    // Force full sync (bypass all caches)
+    // Force full sync depuis Supabase
     async forceFullSync() {
-        localStorage.removeItem(SYNC_METADATA_KEY);
-        Toast.info('Synchronisation complète en cours...');
-        await this.syncWithGoogleSheets(true);
+        Toast.info('Rechargement complet depuis Supabase...');
+        commandes = []; // Reset
+        await this.syncWithSupabase();
     }
 
     // Méthode 5: Merge intelligent avec nettoyage des commandes obsolètes
@@ -5631,18 +5597,19 @@ class DataSyncManager {
         return removedCount;
     }
 
-    // Méthode 7: Auto-sync périodique
-    startAutoSync() {
+    // Méthode 7: Auto-sync périodique avec Supabase
+    startAutoSyncSupabase() {
         if (this.syncInterval) clearInterval(this.syncInterval);
+        // Sync moins fréquente car Realtime gère les mises à jour
         this.syncInterval = setInterval(() => {
-            this.syncWithGoogleSheets();
-        }, 5 * 60 * 1000); // 5 minutes
+            this.syncWithSupabase();
+        }, 10 * 60 * 1000); // 10 minutes (Realtime fait le reste)
     }
 
     // Méthode 8: Sync manuelle
     manualSync() {
-        Toast.info('Synchronisation en cours...');
-        this.syncWithGoogleSheets();
+        Toast.info('Synchronisation Supabase...');
+        this.syncWithSupabase();
     }
 
     // Méthode 9: Mise à jour indicateur UI
@@ -9281,6 +9248,7 @@ function applyScenario(scenario, selectedOrder) {
             dEnd.setHours(parseInt(eh), parseInt(em), 0, 0);
 
             operation.slots.push({
+                id: generateSlotId(operation.id, operation.slots),
                 machine: slot.machine,
                 duree: slot.hours,
                 semaine: targetWeek,
@@ -9343,6 +9311,7 @@ function applyScenario(scenario, selectedOrder) {
             dEnd.setHours(parseInt(eh), parseInt(em), 0, 0);
 
             operation.slots.push({
+                id: generateSlotId(operation.id, operation.slots),
                 machine: displacement.newSlot.machine,
                 duree: displacement.slot.duree,
                 semaine: targetWeek,
@@ -9417,6 +9386,7 @@ function applyScenario(scenario, selectedOrder) {
             dEnd.setHours(parseInt(eh), parseInt(em), 0, 0);
 
             operation.slots.push({
+                id: generateSlotId(operation.id, operation.slots),
                 machine: slot.machine,
                 duree: slot.hours,
                 semaine: targetWeek,
@@ -12031,6 +12001,7 @@ function confirmerPlacementSemiAuto() {
                 // S'assurer que duree est un nombre valide
                 const duree = typeof slot.duree === 'number' && !isNaN(slot.duree) ? slot.duree : 0;
                 operation.slots.push({
+                    id: generateSlotId(operation.id, operation.slots),
                     machine: slot.machine,
                     duree: duree,
                     jour: slot.jour,

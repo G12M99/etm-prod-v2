@@ -1,0 +1,330 @@
+// =====================================================
+// ETM PROD - SYNC GOOGLE SHEETS → SUPABASE (OPTIMISÉ)
+// =====================================================
+// Version batch + filtre 2 mois
+
+// Configuration Supabase
+const SUPABASE_URL = 'https://veyqcnoaiqotikpjfgjq.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_wa6y4sYvbvKtzSFBzw7lBg_CYdxXr1P';
+
+// Configuration Sheet
+const SPREADSHEET_ID = "1z3KCtfrBZw1z3mr4vnqYoushepKH7mfo-TKHJ6IUswY";
+const SHEET_NAME = "API_ETM";
+
+// Mapping des colonnes (index 0-based)
+const COL = {
+  FIN_PROD: 0,
+  CODE_CDE: 1,
+  STATUT: 2,
+  CLIENT: 3,
+  POIDS: 4,
+  CISAILLE: 5,
+  POINCON: 6,
+  PLIAGE: 7,
+  REF_CLIENT: 8
+};
+
+// Mapping statuts
+const STATUT_MAP = {
+  'en cours': 'En cours',
+  'planifiée': 'Planifiée',
+  'planifie': 'Planifiée',
+  'en prépa': 'En prépa',
+  'en prepa': 'En prépa',
+  'livrée': 'Livrée',
+  'livre': 'Livrée',
+  'livré': 'Livrée',
+  'terminée': 'Terminée',
+  'termine': 'Terminée',
+  'terminé': 'Terminée'
+};
+
+// =====================================================
+// TRIGGER PRINCIPAL (toutes les 5 min)
+// =====================================================
+
+/**
+ * Synchronise uniquement les lignes modifiées des 2 derniers mois (batch)
+ * Configurer: Déclencheurs > + > syncIfChanged > Basé sur le temps > 5 min
+ */
+function syncIfChanged() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  
+  const cache = CacheService.getScriptCache();
+  const commandesToSync = [];
+  const operationsToSync = [];
+  const updatedKeys = [];
+  
+  // Date limite : 2 mois en arrière
+  const twoMonthsAgo = new Date();
+  twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+  
+  let skipped = 0;
+  let checked = 0;
+  
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const codeCde = row[COL.CODE_CDE];
+    
+    if (!codeCde || codeCde.toString().trim() === '') continue;
+    
+    // Filtrer : ignorer les commandes trop anciennes
+    const dateLivraison = parseDateFromRow(row[COL.FIN_PROD]);
+    if (dateLivraison && dateLivraison < twoMonthsAgo) {
+      skipped++;
+      continue;
+    }
+    
+    checked++;
+    const id = codeCde.toString().trim();
+    
+    // Hash de la ligne pour détecter les changements
+    const rowHash = Utilities.computeDigest(
+      Utilities.DigestAlgorithm.MD5,
+      JSON.stringify(row)
+    ).toString();
+    
+    const cacheKey = 'row_' + id;
+    const lastHash = cache.get(cacheKey);
+    
+    if (lastHash !== rowHash) {
+      // Préparer la commande
+      commandesToSync.push({
+        id: id,
+        client_name: row[COL.CLIENT] ? row[COL.CLIENT].toString().trim() : 'Inconnu',
+        date_livraison: formatDateForSupabase(row[COL.FIN_PROD]),
+        statut: normalizeStatut(row[COL.STATUT]),
+        poids: parseFloat(row[COL.POIDS].toString().replace(',', '.')) || 0,
+        ref_cde_client: row[COL.REF_CLIENT] ? row[COL.REF_CLIENT].toString().trim() : null
+      });
+      
+      // Préparer les opérations
+      const dureeCisaille = parseFloat(row[COL.CISAILLE].toString().replace(',', '.')) || 0;
+      const dureePoincon = parseFloat(row[COL.POINCON].toString().replace(',', '.')) || 0;
+      const dureePliage = parseFloat(row[COL.PLIAGE].toString().replace(',', '.')) || 0;
+      
+      if (dureeCisaille > 0) {
+        operationsToSync.push({
+          id: id + '_cisaillage',
+          commande_id: id,
+          type: 'Cisaillage',
+          duree_total: dureeCisaille,
+          duree_original: dureeCisaille,
+          ordre: 1,
+          statut: 'Non placée'
+        });
+      }
+      if (dureePoincon > 0) {
+        operationsToSync.push({
+          id: id + '_poinconnage',
+          commande_id: id,
+          type: 'Poinçonnage',
+          duree_total: dureePoincon,
+          duree_original: dureePoincon,
+          ordre: 2,
+          statut: 'Non placée'
+        });
+      }
+      if (dureePliage > 0) {
+        operationsToSync.push({
+          id: id + '_pliage',
+          commande_id: id,
+          type: 'Pliage',
+          duree_total: dureePliage,
+          duree_original: dureePliage,
+          ordre: 3,
+          statut: 'Non placée'
+        });
+      }
+      
+      updatedKeys.push({ key: cacheKey, hash: rowHash });
+    }
+  }
+  
+  console.log('Vérifiées: ' + checked + ' | Ignorées (>2 mois): ' + skipped);
+  
+  // Batch upsert si des changements
+  if (commandesToSync.length > 0) {
+    console.log('Changements: ' + commandesToSync.length + ' commandes');
+    
+    const resCommandes = batchUpsert('commandes', commandesToSync);
+    console.log('Commandes: ' + resCommandes);
+    
+    if (operationsToSync.length > 0) {
+      const resOps = batchUpsert('operations', operationsToSync);
+      console.log('Opérations: ' + resOps);
+    }
+    
+    // Mettre à jour le cache
+    for (const item of updatedKeys) {
+      cache.put(item.key, item.hash, 21600);
+    }
+    
+    console.log('✓ Sync terminée');
+  } else {
+    console.log('Aucun changement');
+  }
+}
+
+// =====================================================
+// HELPERS
+// =====================================================
+
+/**
+ * Parse une date depuis une cellule Sheet (corrigé pour Google Apps Script)
+ */
+function parseDateFromRow(dateValue) {
+  if (!dateValue) return null;
+  
+  // Google Apps Script : les dates sont des objets avec getTime()
+  if (dateValue && typeof dateValue.getTime === 'function') {
+    return dateValue;
+  }
+  
+  // Fallback : string au format DD/MM/YYYY
+  const parts = dateValue.toString().split('/');
+  if (parts.length === 3) {
+    return new Date(parts[2], parts[1] - 1, parts[0]);
+  }
+  
+  return null;
+}
+
+/**
+ * Formate une date pour Supabase (YYYY-MM-DD)
+ */
+function formatDateForSupabase(dateValue) {
+  if (!dateValue) return null;
+  
+  let date;
+  
+  if (dateValue && typeof dateValue.getTime === 'function') {
+    date = dateValue;
+  } else {
+    const parts = dateValue.toString().split('/');
+    if (parts.length === 3) {
+      date = new Date(parts[2], parts[1] - 1, parts[0]);
+    } else {
+      return null;
+    }
+  }
+  
+  if (isNaN(date.getTime())) return null;
+  return date.toISOString().split('T')[0];
+}
+
+/**
+ * Normalise le statut vers les valeurs Supabase
+ */
+function normalizeStatut(statut) {
+  if (!statut) return 'En cours';
+  const normalized = statut.toString().toLowerCase().trim();
+  return STATUT_MAP[normalized] || 'En cours';
+}
+
+// =====================================================
+// BATCH UPSERT
+// =====================================================
+
+/**
+ * Upsert en batch (1 seule requête pour N lignes)
+ */
+function batchUpsert(table, data) {
+  if (!data || data.length === 0) return 'skip';
+  
+  const response = UrlFetchApp.fetch(SUPABASE_URL + '/rest/v1/' + table, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates'
+    },
+    payload: JSON.stringify(data),
+    muteHttpExceptions: true
+  });
+  
+  const code = response.getResponseCode();
+  if (code !== 200 && code !== 201) {
+    console.error('Erreur ' + table + ': ' + response.getContentText());
+    return 'erreur ' + code;
+  }
+  
+  return 'ok (' + data.length + ')';
+}
+
+// =====================================================
+// UTILITAIRES
+// =====================================================
+
+/**
+ * Force une resync complète (vide le cache des 2 derniers mois)
+ */
+function forceFullSync() {
+  const cache = CacheService.getScriptCache();
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  
+  const twoMonthsAgo = new Date();
+  twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+  
+  let cleared = 0;
+  for (let i = 1; i < data.length; i++) {
+    const codeCde = data[i][COL.CODE_CDE];
+    const dateLivraison = parseDateFromRow(data[i][COL.FIN_PROD]);
+    
+    if (codeCde && (!dateLivraison || dateLivraison >= twoMonthsAgo)) {
+      cache.remove('row_' + codeCde.toString().trim());
+      cleared++;
+    }
+  }
+  
+  console.log('Cache vidé: ' + cleared + ' entrées');
+  console.log('Lancement sync...');
+  syncIfChanged();
+}
+
+/**
+ * Test connexion Supabase
+ */
+function testSupabaseConnection() {
+  const response = UrlFetchApp.fetch(SUPABASE_URL + '/rest/v1/machines?select=id,name&limit=1', {
+    method: 'GET',
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_ANON_KEY
+    },
+    muteHttpExceptions: true
+  });
+  
+  console.log('HTTP ' + response.getResponseCode());
+  console.log(response.getContentText());
+}
+
+/**
+ * Stats Supabase
+ */
+function getSupabaseStats() {
+  const tables = ['commandes', 'operations', 'slots', 'machines'];
+  
+  for (const table of tables) {
+    const response = UrlFetchApp.fetch(
+      SUPABASE_URL + '/rest/v1/' + table + '?select=id',
+      {
+        method: 'GET',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+          'Prefer': 'count=exact'
+        },
+        muteHttpExceptions: true
+      }
+    );
+    
+    const count = response.getHeaders()['content-range'];
+    console.log(table + ': ' + (count ? count.split('/')[1] : '?'));
+  }
+}

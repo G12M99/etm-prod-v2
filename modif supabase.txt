@@ -1,0 +1,19 @@
+ALTER TABLE commandes ALTER COLUMN date_livraison DROP NOT NULL
+
+ -- Supprimer l'ancienne contrainte
+ ALTER TABLE commandes DROP CONSTRAINT IF EXISTS commandes_statut_check;
+
+ -- Ajouter la nouvelle contrainte avec 'Non placée'
+ ALTER TABLE commandes ADD CONSTRAINT commandes_statut_check
+ CHECK (statut IN ('En cours', 'Planifiée', 'En prépa', 'Livrée', 'Terminée', 'Non placée'));
+
+  ALTER PUBLICATION supabase_realtime ADD TABLE system_events;
+ ALTER PUBLICATION supabase_realtime ADD TABLE breaks;
+ ALTER PUBLICATION supabase_realtime ADD TABLE overtime_config;
+ ALTER PUBLICATION supabase_realtime ADD TABLE overtime_slots;
+
+ -- Supprimer dans l'ordre (à cause des foreign keys)
+DELETE FROM slots;
+DELETE FROM operations;
+DELETE FROM commandes;
+

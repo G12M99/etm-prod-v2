@@ -2065,6 +2065,7 @@ function setOperationTimeOverride(commandeId, operationType, newDuration) {
 
     // Sauvegarder et rafraîchir
     historyManager.saveState(`Override temps ${operationType} ${commandeId}`);
+    markCommandeDirty(commandeId);
     syncManager.saveLocalData();
     refresh();
 
@@ -2088,6 +2089,7 @@ function resetOperationTimeOverride(commandeId, operationType) {
     operation.overrideTimestamp = null;
 
     historyManager.saveState(`Reset temps ${operationType} ${commandeId}`);
+    markCommandeDirty(commandeId);
     syncManager.saveLocalData();
     refresh();
 
@@ -3771,6 +3773,7 @@ function handleSidebarDrop(e) {
     else cmd.statut = "Non placée";
 
     historyManager.saveState(`Unplan ${cmd.id} (${removedCount} ops)`);
+    markCommandeDirty(cmd.id);
     syncManager.saveLocalData();
     refresh();
     Toast.info(`${removedCount} opération(s) retirée(s) du planning`);
@@ -3862,6 +3865,7 @@ function handleWeekCellDrop(e) {
     }
 
     // Sauvegarder
+    markCommandeDirty(cmd.id);
     if (typeof syncManager !== 'undefined') {
         syncManager.saveLocalData();
     }
@@ -3919,6 +3923,7 @@ function desaffecterCommande(commandeId) {
     }
 
     // Sauvegarder
+    markCommandeDirty(commandeId);
     if (typeof syncManager !== 'undefined') {
         syncManager.saveLocalData();
     }
@@ -4276,7 +4281,7 @@ async function handleDrop(e) {
 
                 renderVueJournee();
                 renderCommandesNonPlacees(currentSearchQuery || '');
-                saveData();
+                saveData(cmd.id);
                 Toast.info(`Opération scindée en ${fragments.length} partie(s) (heures sup refusées)`);
                 return;
             }
@@ -4322,7 +4327,7 @@ async function handleDrop(e) {
 
         renderVueJournee();
         renderCommandesNonPlacees(currentSearchQuery || ''); // Update sidebar
-        saveData();
+        saveData(cmd.id);
 
         // Message différent si fusion automatique ou simple déplacement
         const wasMultiFragment = slotsBackup.length > 1;
@@ -4399,7 +4404,7 @@ async function handleDrop(e) {
 
                     renderVueJournee();
                     renderCommandesNonPlacees(currentSearchQuery || '');
-                    saveData();
+                    saveData(cmd.id);
                     Toast.success(`Opération placée avec ${formatHours(overtimeNeeded)} d'heures supplémentaires`);
                 } else {
                     // Refusé → Scinder l'opération
@@ -4435,7 +4440,7 @@ async function handleDrop(e) {
 
                     renderVueJournee();
                     renderCommandesNonPlacees(currentSearchQuery || '');
-                    saveData();
+                    saveData(cmd.id);
                     Toast.info(`Opération scindée en ${fragments.length} partie(s) (heures sup refusées)`);
                 }
             } else {
@@ -4472,7 +4477,7 @@ async function handleDrop(e) {
 
                 renderVueJournee();
                 renderCommandesNonPlacees(currentSearchQuery || '');
-                saveData();
+                saveData(cmd.id);
                 Toast.info(`Opération scindée en ${fragments.length} partie(s)`);
             }
         } else {
@@ -4789,6 +4794,7 @@ async function placerAutomatiquement(commandeId) {
     }
 
     historyManager.saveState(`Auto-place ${commandeId}`);
+    saveData(commandeId);
 
     // Re-render
     refresh();
@@ -5494,22 +5500,29 @@ class DataSyncManager {
         }, 2000); // Attendre 2s d'inactivité avant de sauvegarder
     }
 
-    // Sauvegarder toutes les commandes vers Supabase
+    // Sauvegarder vers Supabase (dirty-tracking optimisé)
     async saveAllToSupabase() {
         if (!supabaseClient) return;
 
-        try {
-            console.log('💾 Sauvegarde vers Supabase...');
+        // Si des commandes spécifiques sont marquées dirty, ne sauvegarder que celles-là
+        // Sinon, fallback : sauvegarder toutes (compatibilité avec les appelants existants)
+        const hasDirty = _dirtyCommandeIds.size > 0;
+        const commandesToSync = hasDirty
+            ? [..._dirtyCommandeIds].map(id => commandes.find(c => c.id === id)).filter(Boolean)
+            : commandes;
 
-            // Pour chaque commande modifiée, mettre à jour Supabase
-            for (const cmd of commandes) {
+        if (hasDirty) _dirtyCommandeIds.clear();
+
+        try {
+            console.log(`💾 Sauvegarde vers Supabase: ${commandesToSync.length} commande(s)${hasDirty ? ' (dirty)' : ' (toutes)'}...`);
+
+            for (const cmd of commandesToSync) {
                 await this.upsertCommandeToSupabase(cmd);
             }
 
             console.log('✅ Sauvegarde Supabase terminée');
         } catch (e) {
             console.error('❌ Erreur sauvegarde Supabase:', e);
-            // Ne pas afficher d'erreur à l'utilisateur, localStorage est le backup
         }
     }
 
@@ -6481,6 +6494,7 @@ function unplanCommand(commandeId) {
     cmd.statut = "Non placée";
 
     historyManager.saveState(`Retrait ${commandeId}`);
+    saveData(commandeId);
     refresh();
     Toast.info(`Commande ${commandeId} retirée du planning`);
 }
@@ -6723,14 +6737,10 @@ function toggleVue(vue) {
 }
 
 /**
- * Refresh all views (Modified for Auto-Save)
+ * Refresh all views
+ * Note: ne sauvegarde PAS vers Supabase - les appelants doivent appeler saveData() explicitement
  */
 function refresh() {
-    // Sauvegarder automatiquement à chaque changement majeur (re-render)
-    if (typeof syncManager !== 'undefined') {
-        syncManager.saveLocalData();
-    }
-
     if (vueActive === 'semaine') {
         renderVueSemaine();
     } else if (vueActive === 'journee') {
@@ -9425,6 +9435,7 @@ function applyScenario(scenario, selectedOrder) {
     if (allPlaced) selectedOrder.statut = "Planifiée";
 
     historyManager.saveState(`Insertion ${selectedOrder.id}`);
+    markCommandeDirty(selectedOrder.id);
     syncManager.saveLocalData();
     refresh();
 
@@ -9649,11 +9660,22 @@ async function init() {
 // ===================================
 
 /**
- * Sauvegarde les données (localStorage + Supabase)
+ * Dirty-tracking : ne sauvegarder vers Supabase que les commandes modifiées
+ */
+const _dirtyCommandeIds = new Set();
+
+function markCommandeDirty(commandeId) {
+    if (commandeId) _dirtyCommandeIds.add(commandeId);
+}
+
+/**
+ * Sauvegarde les données (localStorage + Supabase pour les commandes dirty)
  * Appelée après chaque modification (drag & drop, etc.)
+ * @param {string} [commandeId] - ID de la commande modifiée (pour dirty-tracking)
  */
 let _isSaving = false;
-function saveData() {
+function saveData(commandeId) {
+    if (commandeId) markCommandeDirty(commandeId);
     if (typeof syncManager !== 'undefined') {
         _isSaving = true;
         syncManager.saveLocalData();
@@ -9663,41 +9685,49 @@ function saveData() {
 }
 
 /**
- * Debounce pour les handlers Realtime
- * Évite de recharger trop souvent et crée des boucles
+ * Rafraîchir l'UI UNIQUEMENT (sans sauvegarde Supabase)
+ * Utilisé par les handlers Realtime pour éviter les boucles de write-back
  */
-let _realtimeDebounceTimer = null;
-let _realtimePendingRefresh = false;
-
-function debouncedRealtimeRefresh() {
-    // Si on est en train de sauvegarder, ignorer (évite la boucle)
-    if (_isSaving) {
-        return;
+function refreshUIOnly() {
+    if (vueActive === 'semaine') {
+        renderVueSemaine();
+    } else if (vueActive === 'journee') {
+        renderVueJournee();
+    } else if (vueActive === 'liste') {
+        renderVueListe();
     }
+    renderCommandesNonPlacees(currentSearchQuery || '');
+    updateCurrentTime();
+}
 
-    _realtimePendingRefresh = true;
-
-    if (_realtimeDebounceTimer) {
-        clearTimeout(_realtimeDebounceTimer);
+/**
+ * Sauvegarder en localStorage UNIQUEMENT (sans Supabase)
+ * Utilisé par les handlers Realtime pour backup sans re-upload
+ */
+function saveLocalStorageOnly() {
+    try {
+        const dataStr = JSON.stringify(commandes);
+        localStorage.setItem(syncManager.STORAGE_KEY, dataStr);
+    } catch (e) {
+        console.error('❌ Erreur sauvegarde localStorage:', e);
     }
+}
 
-    // Attendre 3s d'inactivité avant de recharger
-    _realtimeDebounceTimer = setTimeout(() => {
-        if (_realtimePendingRefresh && !_isSaving) {
-            console.log('🔄 Realtime: rechargement des données...');
-            _realtimePendingRefresh = false;
+/**
+ * Debounce pour les handlers Realtime
+ * Batch les events rapides (500ms) et ne fait que rafraîchir l'UI + localStorage
+ */
+let _realtimeUpdateTimer = null;
 
-            if (typeof syncManager !== 'undefined' && supabaseClient) {
-                syncManager.loadCommandesFromSupabase().then(data => {
-                    if (data && data.length > 0) {
-                        mergeRealtimeCommandes(data);
-                        refresh();
-                        console.log('✅ Données synchronisées depuis Supabase');
-                    }
-                }).catch(err => console.error('Erreur reload commandes:', err));
-            }
-        }
-    }, 3000);
+function debouncedRealtimeUpdate() {
+    if (_realtimeUpdateTimer) {
+        clearTimeout(_realtimeUpdateTimer);
+    }
+    _realtimeUpdateTimer = setTimeout(() => {
+        _realtimeUpdateTimer = null;
+        refreshUIOnly();
+        saveLocalStorageOnly();
+    }, 500);
 }
 
 /**
@@ -9750,8 +9780,7 @@ function handleRealtimeCommandeChange(payload) {
         }
     }
 
-    refresh();
-    if (typeof syncManager !== 'undefined') syncManager.saveLocalData();
+    debouncedRealtimeUpdate();
 }
 
 /**
@@ -9827,8 +9856,7 @@ function handleRealtimeOperationChange(payload) {
         }
     }
 
-    refresh();
-    if (typeof syncManager !== 'undefined') syncManager.saveLocalData();
+    debouncedRealtimeUpdate();
 }
 
 /**
@@ -9909,8 +9937,7 @@ function handleRealtimeSlotChange(payload) {
         }
     }
 
-    refresh();
-    if (typeof syncManager !== 'undefined') syncManager.saveLocalData();
+    debouncedRealtimeUpdate();
 }
 
 /**

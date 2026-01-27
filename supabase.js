@@ -421,28 +421,58 @@ async function saveOvertimeConfigToSupabase(config, slots) {
 // ============================================
 
 let realtimeChannels = [];
+let _subscribedCount = 0;
+let _totalSubscriptions = 0;
 
 // Fonction générique de subscription
 function subscribeToTable(tableName, callback) {
     if (!supabaseClient) return null;
+
+    _totalSubscriptions++;
 
     const channel = supabaseClient
         .channel(`${tableName}-changes`)
         .on('postgres_changes',
             { event: '*', schema: 'public', table: tableName },
             (payload) => {
-                // Log minimal (pas de spam)
                 callback(payload);
             }
         )
-        .subscribe((status) => {
+        .subscribe((status, err) => {
             if (status === 'SUBSCRIBED') {
-                console.log(`📡 Realtime ${tableName}: connecté`);
+                _subscribedCount++;
+                console.log(`📡 Realtime ${tableName}: connecté (${_subscribedCount}/${_totalSubscriptions})`);
+                updateRealtimeStatusUI('connected');
+            } else if (status === 'CHANNEL_ERROR') {
+                console.error(`❌ Realtime ${tableName}: erreur`, err);
+                updateRealtimeStatusUI('error');
+            } else if (status === 'TIMED_OUT') {
+                console.warn(`⚠️ Realtime ${tableName}: timeout`);
+                updateRealtimeStatusUI('disconnected');
+            } else if (status === 'CLOSED') {
+                _subscribedCount = Math.max(0, _subscribedCount - 1);
+                console.warn(`🔌 Realtime ${tableName}: fermé`);
+                if (_subscribedCount === 0) updateRealtimeStatusUI('disconnected');
             }
         });
 
     realtimeChannels.push(channel);
     return channel;
+}
+
+// Mise à jour de l'indicateur visuel Realtime
+function updateRealtimeStatusUI(status) {
+    const el = document.getElementById('realtimeStatus');
+    if (!el) return;
+
+    el.className = `realtime-status realtime-${status}`;
+    const config = {
+        connected:    { dot: '●', label: 'Temps réel actif' },
+        disconnected: { dot: '○', label: 'Temps réel déconnecté' },
+        error:        { dot: '!', label: 'Erreur temps réel' }
+    };
+    const c = config[status] || config.disconnected;
+    el.innerHTML = `<span class="realtime-dot">${c.dot}</span><span>${c.label}</span>`;
 }
 
 // Subscriptions individuelles

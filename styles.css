@@ -1998,6 +1998,42 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* Realtime Status Indicator */
+.realtime-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    transition: all 0.3s ease;
+}
+
+.realtime-dot {
+    font-size: 0.6rem;
+    line-height: 1;
+}
+
+.realtime-status.realtime-connected {
+    color: #059669;
+    background: #d1fae5;
+    border-color: #6ee7b7;
+}
+
+.realtime-status.realtime-disconnected {
+    color: #d97706;
+    background: #fef3c7;
+    border-color: #fcd34d;
+}
+
+.realtime-status.realtime-error {
+    color: #dc2626;
+    background: #fee2e2;
+    border-color: #fca5a5;
+}
+
 /* Dropdown Menu */
 .dropdown {
     position: relative;

@@ -714,6 +714,7 @@ class HistoryManager {
     restoreState(snapshot) {
         commandes = JSON.parse(JSON.stringify(snapshot.state));
         refresh(); // Re-render everything
+        markAllCommandesDirty();
         if (typeof syncManager !== 'undefined') syncManager.saveLocalData(); // Persist
     }
     
@@ -5008,6 +5009,7 @@ class DataSyncManager {
 
                     // Migration des noms de machines si nécessaire
                     if (migrateMachineNames()) {
+                        markAllCommandesDirty();
                         this.saveLocalData();
                     }
 
@@ -5500,29 +5502,27 @@ class DataSyncManager {
         }, 2000); // Attendre 2s d'inactivité avant de sauvegarder
     }
 
-    // Sauvegarder vers Supabase (dirty-tracking optimisé)
+    // Sauvegarder vers Supabase (uniquement les commandes modifiées)
     async saveAllToSupabase() {
         if (!supabaseClient) return;
+        if (_dirtyCommandeIds.size === 0) return; // Rien à sauvegarder
 
-        // Si des commandes spécifiques sont marquées dirty, ne sauvegarder que celles-là
-        // Sinon, fallback : sauvegarder toutes (compatibilité avec les appelants existants)
-        const hasDirty = _dirtyCommandeIds.size > 0;
-        const commandesToSync = hasDirty
-            ? [..._dirtyCommandeIds].map(id => commandes.find(c => c.id === id)).filter(Boolean)
-            : commandes;
-
-        if (hasDirty) _dirtyCommandeIds.clear();
+        const idsToSync = [..._dirtyCommandeIds];
+        _dirtyCommandeIds.clear();
 
         try {
-            console.log(`💾 Sauvegarde vers Supabase: ${commandesToSync.length} commande(s)${hasDirty ? ' (dirty)' : ' (toutes)'}...`);
+            console.log(`💾 Supabase: ${idsToSync.length} commande(s) modifiée(s)`);
 
-            for (const cmd of commandesToSync) {
-                await this.upsertCommandeToSupabase(cmd);
+            for (const cmdId of idsToSync) {
+                const cmd = commandes.find(c => c.id === cmdId);
+                if (cmd) {
+                    await this.upsertCommandeToSupabase(cmd);
+                }
             }
-
-            console.log('✅ Sauvegarde Supabase terminée');
         } catch (e) {
             console.error('❌ Erreur sauvegarde Supabase:', e);
+            // Re-marquer les IDs en erreur pour retenter
+            idsToSync.forEach(id => _dirtyCommandeIds.add(id));
         }
     }
 
@@ -5670,6 +5670,7 @@ class DataSyncManager {
                 const json = JSON.parse(e.target.result);
                 if (json.commandes && Array.isArray(json.commandes)) {
                     commandes = json.commandes;
+                    markAllCommandesDirty();
                     this.saveLocalData();
                     refresh();
                     Toast.success('Import réussi');
@@ -9659,6 +9660,8 @@ async function init() {
 // REALTIME HANDLERS - Gestion des changements temps réel
 // ===================================
 
+const REALTIME_DEBUG = false; // Passer à true pour logs détaillés Realtime
+
 /**
  * Dirty-tracking : ne sauvegarder vers Supabase que les commandes modifiées
  */
@@ -9666,6 +9669,10 @@ const _dirtyCommandeIds = new Set();
 
 function markCommandeDirty(commandeId) {
     if (commandeId) _dirtyCommandeIds.add(commandeId);
+}
+
+function markAllCommandesDirty() {
+    commandes.forEach(c => { if (c.id) _dirtyCommandeIds.add(c.id); });
 }
 
 /**
@@ -9737,7 +9744,7 @@ function handleRealtimeCommandeChange(payload) {
     // Ignorer nos propres modifications
     const recordId = payload?.new?.id || payload?.old?.id;
     if (recordId && isOurOwnRealtimeEvent(recordId)) {
-        console.log(`🔇 Realtime ignoré (notre modif): commande ${recordId}`);
+        if (REALTIME_DEBUG) console.log(`🔇 Realtime ignoré (notre modif): commande ${recordId}`);
         return;
     }
 
@@ -9808,7 +9815,7 @@ function handleRealtimeOperationChange(payload) {
     // Ignorer nos propres modifications
     const recordId = payload?.new?.id || payload?.old?.id;
     if (recordId && isOurOwnRealtimeEvent(recordId)) {
-        console.log(`🔇 Realtime ignoré (notre modif): operation ${recordId}`);
+        if (REALTIME_DEBUG) console.log(`🔇 Realtime ignoré (notre modif): operation ${recordId}`);
         return;
     }
 
@@ -9885,11 +9892,11 @@ function handleRealtimeSlotChange(payload) {
     const operationId = payload?.new?.operation_id || payload?.old?.operation_id;
 
     if (recordId && isOurOwnRealtimeEvent(recordId)) {
-        console.log(`🔇 Realtime ignoré (notre modif): slot ${recordId}`);
+        if (REALTIME_DEBUG) console.log(`🔇 Realtime ignoré (notre modif): slot ${recordId}`);
         return;
     }
     if (operationId && isOurOwnRealtimeEvent(operationId)) {
-        console.log(`🔇 Realtime ignoré (notre modif via operation): slot ${recordId}`);
+        if (REALTIME_DEBUG) console.log(`🔇 Realtime ignoré (notre modif via operation): slot ${recordId}`);
         return;
     }
 

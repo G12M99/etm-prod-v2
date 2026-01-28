@@ -9732,12 +9732,282 @@ async function saveDataImmediate(commandeId) {
     if (typeof syncManager !== 'undefined') {
         _isSaving = true;
         syncManager.saveLocalData();
-        if (supabaseClient) {
+        if (!navigator.onLine || !supabaseClient) {
+            // Mode offline - ajouter à la file d'attente
+            addToOfflineQueue('save_commande', { commandeId });
+            Toast.info('Sauvegardé localement (hors ligne)');
+        } else {
             await syncManager.saveAllToSupabase();
         }
         setTimeout(() => { _isSaving = false; }, 1500);
     }
 }
+
+// ===================================
+// CONFLICT DETECTION (Multi-utilisateurs)
+// ===================================
+
+/**
+ * Vérifie si un slot a été modifié par un autre utilisateur
+ * Compare le timestamp local avec celui en base
+ * @param {string} slotId - ID du slot
+ * @param {string} localUpdatedAt - Timestamp local connu (ISO string)
+ * @returns {Promise<{hasConflict: boolean, remoteData: object|null}>}
+ */
+async function checkSlotConflict(slotId, localUpdatedAt) {
+    if (!supabaseClient) return { hasConflict: false, remoteData: null };
+
+    try {
+        const { data, error } = await supabaseClient
+            .from('slots')
+            .select('*')
+            .eq('id', slotId)
+            .single();
+
+        if (error || !data) return { hasConflict: false, remoteData: null };
+
+        // Si pas de timestamp local, pas de conflit possible
+        if (!localUpdatedAt) return { hasConflict: false, remoteData: data };
+
+        // Comparer les timestamps
+        const remoteTime = new Date(data.updated_at).getTime();
+        const localTime = new Date(localUpdatedAt).getTime();
+
+        // Conflit si remote est plus récent (avec 2s de marge)
+        const hasConflict = remoteTime > localTime + 2000;
+
+        return { hasConflict, remoteData: data };
+
+    } catch (e) {
+        console.error('Erreur vérification conflit:', e);
+        return { hasConflict: false, remoteData: null };
+    }
+}
+
+/**
+ * Sauvegarde un slot avec détection de conflit
+ * Si conflit détecté, demande confirmation à l'utilisateur
+ */
+async function saveSlotWithConflictCheck(slot, operationId) {
+    if (!supabaseClient) {
+        // Mode offline - sauvegarder localement uniquement
+        syncManager.saveLocalData();
+        return true;
+    }
+
+    // Vérifier s'il y a un conflit potentiel
+    const { hasConflict, remoteData } = await checkSlotConflict(slot.id, slot._lastSyncedAt);
+
+    if (hasConflict && remoteData) {
+        // Conflit détecté ! Demander à l'utilisateur
+        const userChoice = await showConflictModal(slot, remoteData);
+
+        if (userChoice === 'keep-mine') {
+            console.log('⚠️ Conflit résolu: données locales conservées');
+        } else if (userChoice === 'keep-remote') {
+            applyRemoteSlotToLocal(remoteData, operationId);
+            Toast.info('Modification annulée - données distantes appliquées');
+            return false;
+        } else {
+            // Annulé
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// ===================================
+// CONFLICT MODAL
+// ===================================
+
+let conflictResolveCallback = null;
+
+/**
+ * Affiche le modal de conflit et attend la décision de l'utilisateur
+ * @returns {Promise<'keep-mine'|'keep-remote'|'cancel'>}
+ */
+function showConflictModal(localSlot, remoteSlot) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('modalConflict');
+        if (!modal) {
+            console.warn('Modal conflit non trouvé dans le DOM');
+            resolve('keep-mine');
+            return;
+        }
+
+        // Afficher les données locales
+        document.getElementById('conflictLocalData').innerHTML = `
+            Machine: <strong>${localSlot.machine || 'N/A'}</strong><br>
+            Jour: ${localSlot.jour || 'N/A'}<br>
+            Horaire: ${localSlot.heureDebut || '?'} - ${localSlot.heureFin || '?'}
+        `;
+
+        // Afficher les données distantes
+        document.getElementById('conflictRemoteData').innerHTML = `
+            Machine: <strong>${remoteSlot.machine_name || 'N/A'}</strong><br>
+            Jour: ${remoteSlot.jour || 'N/A'}<br>
+            Horaire: ${remoteSlot.heure_debut || '?'} - ${remoteSlot.heure_fin || '?'}
+        `;
+
+        conflictResolveCallback = resolve;
+        modal.classList.add('active');
+    });
+}
+
+function closeConflictModal() {
+    const modal = document.getElementById('modalConflict');
+    if (modal) modal.classList.remove('active');
+    if (conflictResolveCallback) {
+        conflictResolveCallback('cancel');
+        conflictResolveCallback = null;
+    }
+}
+
+function resolveConflict(choice) {
+    const modal = document.getElementById('modalConflict');
+    if (modal) modal.classList.remove('active');
+    if (conflictResolveCallback) {
+        conflictResolveCallback(choice);
+        conflictResolveCallback = null;
+    }
+}
+
+/**
+ * Applique les données d'un slot distant au slot local
+ */
+function applyRemoteSlotToLocal(remoteSlot, operationId) {
+    for (const cmd of commandes) {
+        const operation = cmd.operations?.find(op => op.id === operationId);
+        if (operation) {
+            const localIndex = (operation.slots || []).findIndex(s => s.id === remoteSlot.id);
+            if (localIndex >= 0) {
+                operation.slots[localIndex] = {
+                    id: remoteSlot.id,
+                    machine: remoteSlot.machine_name,
+                    duree: parseFloat(remoteSlot.duree),
+                    semaine: remoteSlot.semaine,
+                    jour: remoteSlot.jour,
+                    heureDebut: remoteSlot.heure_debut,
+                    heureFin: remoteSlot.heure_fin,
+                    dateDebut: remoteSlot.date_debut,
+                    dateFin: remoteSlot.date_fin,
+                    overtime: remoteSlot.overtime,
+                    _lastSyncedAt: remoteSlot.updated_at
+                };
+                syncManager.saveLocalData();
+                refreshUIOnly();
+                return;
+            }
+        }
+    }
+}
+
+// ===================================
+// OFFLINE QUEUE
+// ===================================
+
+const OFFLINE_QUEUE_KEY = 'etm_offline_queue';
+
+/**
+ * Récupère la file d'attente offline depuis localStorage
+ */
+function getOfflineQueue() {
+    try {
+        const stored = localStorage.getItem(OFFLINE_QUEUE_KEY);
+        return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+/**
+ * Sauvegarde la file d'attente offline
+ */
+function saveOfflineQueue(queue) {
+    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+}
+
+/**
+ * Ajoute une opération à la file d'attente offline
+ */
+function addToOfflineQueue(action, data) {
+    const queue = getOfflineQueue();
+    queue.push({
+        id: 'offline_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+        action: action,
+        data: data,
+        timestamp: new Date().toISOString()
+    });
+    saveOfflineQueue(queue);
+    console.log('📦 Ajouté à la file offline:', action);
+}
+
+/**
+ * Traite la file d'attente offline quand la connexion revient
+ */
+async function processOfflineQueue() {
+    const queue = getOfflineQueue();
+    if (queue.length === 0) return;
+
+    console.log(`🔄 Traitement de ${queue.length} opération(s) en attente...`);
+    Toast.info(`Synchronisation de ${queue.length} modification(s)...`);
+
+    const failedItems = [];
+
+    for (const item of queue) {
+        try {
+            let success = false;
+
+            switch (item.action) {
+                case 'save_commande':
+                    if (item.data.commandeId) {
+                        markCommandeDirty(item.data.commandeId);
+                        await syncManager.saveAllToSupabase();
+                        success = true;
+                    }
+                    break;
+                case 'delete_slot':
+                    success = await deleteSlotFromSupabase(item.data.slotId);
+                    break;
+                default:
+                    console.warn('Action offline inconnue:', item.action);
+                    success = true;
+            }
+
+            if (!success) {
+                failedItems.push(item);
+            }
+
+        } catch (e) {
+            console.error('Erreur traitement offline:', e);
+            failedItems.push(item);
+        }
+    }
+
+    saveOfflineQueue(failedItems);
+
+    if (failedItems.length === 0) {
+        Toast.success('Toutes les modifications synchronisées !');
+    } else {
+        Toast.warning(`${failedItems.length} modification(s) en attente`);
+    }
+}
+
+// Écouter le retour en ligne / hors ligne
+window.addEventListener('online', () => {
+    console.log('🌐 Connexion rétablie');
+    updateRealtimeStatusUI('connected');
+    // Attendre que la connexion soit stable
+    setTimeout(() => {
+        processOfflineQueue();
+    }, 2000);
+});
+
+window.addEventListener('offline', () => {
+    console.log('📴 Connexion perdue');
+    updateRealtimeStatusUI('disconnected');
+});
 
 /**
  * Rafraîchir l'UI UNIQUEMENT (sans sauvegarde Supabase)
@@ -10107,6 +10377,8 @@ if (document.readyState === 'loading') {
 window.placerAutomatiquement = placerAutomatiquement;
 window.showCommandeDetails = showCommandeDetails;
 window.toggleVue = toggleVue;
+window.closeConflictModal = closeConflictModal;
+window.resolveConflict = resolveConflict;
 
 // ===================================
 // Machine Management System

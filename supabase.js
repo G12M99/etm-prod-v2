@@ -467,12 +467,22 @@ function updateRealtimeStatusUI(status) {
 
     el.className = `realtime-status realtime-${status}`;
     const config = {
+        connecting:   { dot: '◌', label: 'Connexion...' },
         connected:    { dot: '●', label: 'Temps réel actif' },
-        disconnected: { dot: '○', label: 'Temps réel déconnecté' },
+        disconnected: { dot: '○', label: 'Hors ligne' },
         error:        { dot: '!', label: 'Erreur temps réel' }
     };
     const c = config[status] || config.disconnected;
     el.innerHTML = `<span class="realtime-dot">${c.dot}</span><span>${c.label}</span>`;
+
+    // Tooltip détaillé
+    const titles = {
+        connecting:   'Connexion au serveur en cours...',
+        connected:    'Connecté - Les modifications sont synchronisées en temps réel',
+        disconnected: 'Déconnecté - Les modifications sont sauvegardées localement',
+        error:        'Erreur de connexion - Tentative de reconnexion...'
+    };
+    el.title = titles[status] || '';
 }
 
 // Subscriptions individuelles
@@ -519,6 +529,7 @@ function subscribeToOvertimeSlots(callback) {
 // Initialiser TOUTES les subscriptions Realtime
 function initAllRealtimeSubscriptions(handlers = {}) {
     console.log('🔄 Initialisation Realtime complète...');
+    updateRealtimeStatusUI('connecting');
 
     // Données de planification
     if (handlers.onCommandeChange) subscribeToCommandes(handlers.onCommandeChange);

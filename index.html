@@ -762,6 +762,47 @@
         </div>
     </div>
 
+    <!-- Modal: Conflit Multi-Utilisateurs -->
+    <div class="modal" id="modalConflict">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Conflit detecte</h2>
+                <button class="btn-close" onclick="closeConflictModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 16px;">
+                    Ce creneau a ete modifie par un autre utilisateur pendant que vous travailliez dessus.
+                </p>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+                    <div style="padding: 12px; background: #e3f2fd; border-radius: 8px;">
+                        <strong>Vos modifications</strong>
+                        <div id="conflictLocalData" style="margin-top: 8px; font-size: 0.9em;"></div>
+                    </div>
+                    <div style="padding: 12px; background: #fff3e0; border-radius: 8px;">
+                        <strong>Donnees distantes</strong>
+                        <div id="conflictRemoteData" style="margin-top: 8px; font-size: 0.9em;"></div>
+                    </div>
+                </div>
+
+                <p style="font-size: 0.9em; color: #666;">
+                    Que souhaitez-vous faire ?
+                </p>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 12px; justify-content: flex-end;">
+                <button class="btn btn-secondary" onclick="resolveConflict('cancel')">
+                    Annuler
+                </button>
+                <button class="btn btn-warning" onclick="resolveConflict('keep-remote')">
+                    Prendre les donnees distantes
+                </button>
+                <button class="btn btn-primary" onclick="resolveConflict('keep-mine')">
+                    Garder mes modifications
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="config.js"></script>
     <script src="supabase.js"></script>

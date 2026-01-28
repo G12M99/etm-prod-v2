@@ -4259,7 +4259,8 @@ async function handleDrop(e) {
                 );
 
                 // Créer les slots pour chaque fragment
-                operation.slots = fragments.map(frag => ({
+                operation.slots = fragments.map((frag, index) => ({
+                    id: generateSlotId(operation.id, fragments.slice(0, index)),
                     machine: frag.machine,
                     duree: frag.duration,
                     semaine: frag.week,
@@ -4282,7 +4283,7 @@ async function handleDrop(e) {
 
                 renderVueJournee();
                 renderCommandesNonPlacees(currentSearchQuery || '');
-                saveData(cmd.id);
+                saveDataImmediate(cmd.id);
                 Toast.info(`Opération scindée en ${fragments.length} partie(s) (heures sup refusées)`);
                 return;
             }
@@ -4328,7 +4329,7 @@ async function handleDrop(e) {
 
         renderVueJournee();
         renderCommandesNonPlacees(currentSearchQuery || ''); // Update sidebar
-        saveData(cmd.id);
+        saveDataImmediate(cmd.id);
 
         // Message différent si fusion automatique ou simple déplacement
         const wasMultiFragment = slotsBackup.length > 1;
@@ -4405,7 +4406,7 @@ async function handleDrop(e) {
 
                     renderVueJournee();
                     renderCommandesNonPlacees(currentSearchQuery || '');
-                    saveData(cmd.id);
+                    saveDataImmediate(cmd.id);
                     Toast.success(`Opération placée avec ${formatHours(overtimeNeeded)} d'heures supplémentaires`);
                 } else {
                     // Refusé → Scinder l'opération
@@ -4418,7 +4419,8 @@ async function handleDrop(e) {
                         gapStartDec
                     );
 
-                    operation.slots = fragments.map(frag => ({
+                    operation.slots = fragments.map((frag, index) => ({
+                        id: generateSlotId(operation.id, fragments.slice(0, index)),
                         machine: frag.machine,
                         duree: frag.duration,
                         semaine: frag.week,
@@ -4441,7 +4443,7 @@ async function handleDrop(e) {
 
                     renderVueJournee();
                     renderCommandesNonPlacees(currentSearchQuery || '');
-                    saveData(cmd.id);
+                    saveDataImmediate(cmd.id);
                     Toast.info(`Opération scindée en ${fragments.length} partie(s) (heures sup refusées)`);
                 }
             } else {
@@ -4455,7 +4457,8 @@ async function handleDrop(e) {
                     gapStartDec
                 );
 
-                operation.slots = fragments.map(frag => ({
+                operation.slots = fragments.map((frag, index) => ({
+                    id: generateSlotId(operation.id, fragments.slice(0, index)),
                     machine: frag.machine,
                     duree: frag.duration,
                     semaine: frag.week,
@@ -4478,7 +4481,7 @@ async function handleDrop(e) {
 
                 renderVueJournee();
                 renderCommandesNonPlacees(currentSearchQuery || '');
-                saveData(cmd.id);
+                saveDataImmediate(cmd.id);
                 Toast.info(`Opération scindée en ${fragments.length} partie(s)`);
             }
         } else {
@@ -5177,7 +5180,7 @@ class DataSyncManager {
         if (cmdError) throw cmdError;
         markRecordAsModified(cmd.id); // Marquer pour ignorer notre propre event Realtime
 
-        // 2. Upsert opérations et slots (avec IDs stables, sans DELETE préalable)
+        // 2. Upsert opérations et slots (avec nettoyage des orphelins)
         if (cmd.operations && cmd.operations.length > 0) {
             for (const op of cmd.operations) {
                 // Utiliser l'ID déterministe de l'opération
@@ -5206,10 +5209,40 @@ class DataSyncManager {
                 if (opError) throw opError;
                 markRecordAsModified(opId); // Marquer pour ignorer notre propre event Realtime
 
-                // 3. Upsert slots avec IDs stables
+                // 3. Nettoyage des slots orphelins + upsert des slots locaux
+                const { data: remoteSlots, error: fetchError } = await supabaseClient
+                    .from('slots')
+                    .select('id')
+                    .eq('operation_id', opId);
+
+                if (fetchError) {
+                    console.warn(`⚠️ Impossible de vérifier les slots orphelins pour ${opId}:`, fetchError);
+                }
+
+                const remoteSlotIds = (remoteSlots || []).map(s => s.id);
+                const localSlotIds = (op.slots || [])
+                    .filter(s => s.id)
+                    .map(s => s.id);
+
+                // Supprimer les slots qui existent dans Supabase mais plus localement
+                const orphanIds = remoteSlotIds.filter(id => !localSlotIds.includes(id));
+
+                if (orphanIds.length > 0) {
+                    console.log(`🧹 Suppression de ${orphanIds.length} slot(s) orphelin(s) pour ${opId}`);
+                    const { error: deleteError } = await supabaseClient
+                        .from('slots')
+                        .delete()
+                        .in('id', orphanIds);
+
+                    if (!deleteError) {
+                        orphanIds.forEach(id => markRecordAsModified(id));
+                    }
+                }
+
+                // Upsert des slots locaux
                 if (op.slots && op.slots.length > 0) {
                     const slotsToUpsert = op.slots
-                        .filter(slot => slot.id)  // Ignorer les slots sans ID
+                        .filter(slot => slot.id)
                         .map(slot => ({
                             id: slot.id,
                             operation_id: opId,
@@ -5232,7 +5265,6 @@ class DataSyncManager {
                             .upsert(slotsToUpsert, { onConflict: 'id' });
 
                         if (slotError) throw slotError;
-                        // Marquer tous les slots pour ignorer nos propres events Realtime
                         slotsToUpsert.forEach(s => markRecordAsModified(s.id));
                     }
                 }
@@ -5499,7 +5531,7 @@ class DataSyncManager {
         }
         this._saveTimeout = setTimeout(() => {
             this.saveAllToSupabase();
-        }, 2000); // Attendre 2s d'inactivité avant de sauvegarder
+        }, 500); // Attendre 500ms d'inactivité avant de sauvegarder
     }
 
     // Sauvegarder vers Supabase (uniquement les commandes modifiées)
@@ -9686,8 +9718,24 @@ function saveData(commandeId) {
     if (typeof syncManager !== 'undefined') {
         _isSaving = true;
         syncManager.saveLocalData();
-        // Reset après le debounce de sauvegarde (3s)
-        setTimeout(() => { _isSaving = false; }, 3000);
+        // Reset après le debounce de sauvegarde (1.5s)
+        setTimeout(() => { _isSaving = false; }, 1500);
+    }
+}
+
+/**
+ * Sauvegarde immédiate vers Supabase (sans debounce)
+ * Pour les opérations critiques comme le drag & drop
+ */
+async function saveDataImmediate(commandeId) {
+    if (commandeId) markCommandeDirty(commandeId);
+    if (typeof syncManager !== 'undefined') {
+        _isSaving = true;
+        syncManager.saveLocalData();
+        if (supabaseClient) {
+            await syncManager.saveAllToSupabase();
+        }
+        setTimeout(() => { _isSaving = false; }, 1500);
     }
 }
 

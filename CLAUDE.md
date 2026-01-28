@@ -1,951 +1,607 @@
-# CLAUDE.md
+# CLAUDE.md — ETM PROD V2 Reference
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is the definitive technical reference for Claude Code sessions. It documents every aspect of the application to avoid re-exploring the codebase.
+
+---
 
 ## Project Overview
 
-**ETM PROD V2** is a production planning application for an industrial sheet metal bending workshop (Aluminum/Galvanized steel). Built as a vanilla JavaScript prototype, it manages order scheduling across multiple machines with strict operational sequence requirements and integrates with Google Sheets for real-time data synchronization.
+**ETM PROD V2** is a production planning application for an industrial sheet metal workshop (Aluminum/Galvanized steel, window/door industry). Built as a single-page vanilla JavaScript application with Supabase backend and real-time multi-user synchronization.
+
+**Users:** Patrick (weekly planning), Pierre (daily planning), Magali (order entry in Google Sheets)
+
+### Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Vanilla HTML5 + CSS3 + ES6+ JavaScript (no framework) |
+| Backend | Supabase (PostgreSQL + Realtime WebSockets) |
+| Data Source | Google Sheets (Magali enters orders) → Apps Script syncs to Supabase every 5 min |
+| Cache | localStorage (offline fallback) |
+| Hosting | Netlify (branch: `supabase-netlify`) |
 
 ### Machine Park
 
-- **2 Cisailles (Shears):** Cisaille A, Cisaille B
-- **2 Poinçonneuses (Punching machines):** Poinçonneuse A, Poinçonneuse B
-- **3 Plieuses (Bending machines):** Plieuse Lo, Plieuse Mik, Plieuse Mok
+| Type | Machines | Operation |
+|------|----------|-----------|
+| Cisailles (Shears) | Cisaille A, Cisaille B | Cisaillage |
+| Poinconneuses (Punching) | Poinconneuse M, Poinconneuse T | Poinconnage |
+| Plieuses (Bending) | Plieuse Lo, Plieuse Mik, Plieuse Mok | Pliage |
 
-### Production Capacity
-
-- **Monday-Thursday:** 8.5h/day (07:30-16:30 with 30min lunch break 12:30-13:00)
-- **Friday:** 5h (07:00-12:00)
-- **Total weekly:** 39h (8.5×4 + 5)
-- **Overtime support:** Configurable in `CAPACITY_CONFIG.overtime` (app.js:52-59)
-- **Overbooking allowed:** Up to 105% capacity with visual warnings (app.js:41-60)
-
-### 🔒 CRITICAL BUSINESS RULE - CHRONOLOGICAL ORDER
-
-The **most critical constraint** in this codebase is the **MANDATORY CHRONOLOGICAL ORDER** of operations:
+### CRITICAL BUSINESS RULE — Chronological Order
 
 ```
-Cisaillage (Shearing) → Poinçonnage (Punching) → Pliage (Bending)
+Cisaillage → Poinconnage → Pliage (STRICT, NON-REVERSIBLE)
 ```
 
-This order is **NON-REVERSIBLE and STRICTLY ENFORCED**. Each operation must **COMPLETE** before the next one can **BEGIN**. This is validated throughout the codebase, particularly in:
-- `validateOperationOrder()` - Ensures 3 operations exist in correct sequence
-- `canPlaceOperation()` - Validates chronological timing when placing/moving operations
-- Drag & drop handling - Prevents invalid moves in real-time
+Each operation must COMPLETE before the next can BEGIN. Enforced in:
+- `validateOperationOrder()` (line 2292)
+- `canPlaceOperation()` (line 2327)
+- `handleDrop()` (line 4055)
+- `placerAutomatiquement()` (line 4510)
 
-**NEVER allow operations to be placed out of chronological order in the planning schedule.**
+**NEVER allow out-of-order placement.**
 
-## Running the Application
+---
 
-This is a static HTML/CSS/JS application with **no build process**:
-
-```bash
-# Open in browser (Windows)
-start index.html
-
-# Or simply open index.html in any modern browser
-```
-
-**No build, lint, or test commands** - this is a prototype application.
-
-## Architecture
-
-### File Structure
+## File Structure
 
 ```
-ETM Prod/
-├── index.html          # Main UI structure with modals, views, and sidebar
-├── styles.css          # Complete styling (CSS Grid, Flexbox, drag & drop)
-├── app.js              # All application logic (~2500+ lines)
-├── README.md           # Comprehensive documentation (French)
-├── GEMINI.md           # Gemini-specific guidance
-└── AI/
-    └── .claude/
-        ├── CLAUDE.md   # This file
-        ├── settings.local.json
-        └── agents/     # Specialized agent definitions
-            ├── front.md
-            ├── back.md
-            ├── fullstack.md
-            ├── manager.md
-            └── Google Sheets Connector.md
+ETM Prod/                          (18,073 lines total)
+├── index.html          (770 lines)   # UI: modals, views, sidebar
+├── styles.css          (4,329 lines) # CSS Grid/Flexbox, drag & drop, print
+├── app.js              (12,406 lines)# ALL application logic
+├── supabase.js         (568 lines)   # Supabase CRUD + Realtime subscriptions
+├── CLAUDE.md                         # This file
+├── README.md                         # User-facing documentation (French)
+└── GEMINI.md                         # Gemini-specific guidance
 ```
 
-**Single-page application:** All logic is in app.js, no modules or external dependencies except Google Fonts.
+**No build process.** Open `index.html` in any browser.
 
-### Data Model
+---
 
-Commands follow a **slot-based system** where operations can be split across multiple time slots:
+## Architecture: Data Flow
+
+```
+Google Sheets (Magali saisit)
+       │
+       ▼  [Google Apps Script, every 5 min, batch upsert]
+Supabase PostgreSQL (source of truth)
+       │                          ▲
+       ▼  [Realtime WebSocket]    │  [Upsert on local changes]
+ETM PROD V2 (browser)  ──────────┘
+       │
+       ▼  [Backup]
+localStorage (offline fallback)
+```
+
+### Sync System
+
+```
+User action (drag/drop, auto-place, etc.)
+  → handleDrop() creates/modifies operation.slots[]
+  → saveDataImmediate(cmd.id)                    [handleDrop: immediate]
+    or saveData(commandeId)                      [other: 500ms debounce]
+  → markCommandeDirty(commandeId)
+  → syncManager.saveLocalData()
+    ├── Save to localStorage
+    └── saveToSupabaseDebounced() [500ms]
+        └── saveAllToSupabase()
+            └── For each dirty ID: upsertCommandeToSupabase(cmd)
+                ├── Upsert commande
+                ├── Upsert operations
+                ├── DELETE orphaned slots (SELECT+compare)
+                ├── Upsert local slots
+                └── markRecordAsModified() on each record
+
+Supabase Realtime → Other clients receive events
+  → handleRealtimeSlotChange(payload)
+    → isOurOwnRealtimeEvent() [skip if < 5s old]
+    → Update local state (commandes[].operations[].slots[])
+    → debouncedRealtimeUpdate() [500ms]
+      → refreshUIOnly() + saveLocalStorageOnly()
+```
+
+---
+
+## Data Model
+
+### Local JavaScript Objects
 
 ```javascript
-{
-  id: "CC25-1001",
-  client: "SPEBI",
-  poids: 150,              // Weight in kg
-  materiau: "Aluminium",   // Material type
-  statut: "En cours",      // Status: En cours / Planifiée / En prépa / Terminée / Livrée
-  dateLivraison: "2025-12-20",
-  operations: [
-    {
-      type: "Cisaillage",
-      dureeTotal: 3,         // Total duration in hours (from Google Sheets or calculated)
-      slots: [               // Can be split across multiple time slots
-        {
-          machine: "Cisaille A",
-          duree: 3,          // Duration for this specific slot
-          semaine: 50,       // ISO week number
-          jour: "Lundi",     // Day name (French)
-          heureDebut: "09:00",
-          heureFin: "12:00",
-          dateDebut: "2025-12-09T09:00:00",
-          dateFin: "2025-12-09T12:00:00"
-        }
-      ],
-      progressionReelle: 75,  // Actual progress percentage
-      statut: "En cours"      // Operation status
-    }
-    // ... more operations (Poinçonnage, Pliage)
-  ]
-}
-```
-
-### Duration Calculation System
-
-Operation durations can be **automatically calculated** based on material weight using coefficients (app.js:104-108):
-
-```javascript
-const DUREE_PAR_KG = {
-    'Cisaillage': 0.02,      // 0.02h per kg
-    'Poinçonnage': 0.015,    // 0.015h per kg
-    'Pliage': 0.025          // 0.025h per kg
-};
-```
-
-**Example:** 150kg Aluminium order:
-- Cisaillage: 150kg × 0.02h/kg = 3h
-- Poinçonnage: 150kg × 0.015h/kg = 2.25h
-- Pliage: 150kg × 0.025h/kg = 3.75h
-
-**However, the primary data source is Google Sheets**, which provides durations in HH:MM:SS format that are converted to decimal hours via `timeToDecimalHours()` (app.js:172-209). Use `calculerDureeOperation(type, poids)` to compute durations for new orders only.
-
-### Data Source - Google Sheets Integration
-
-The application loads **real production data from Google Sheets** via the Google Sheets API:
-
-**Key Integration Points:**
-- **Sheet ID:** Stored in `GOOGLE_SHEET_ID` constant (app.js top)
-- **API Key:** Stored in `GOOGLE_API_KEY` constant (app.js top)
-- **Data Loading:** `loadOrdersFromGoogleSheets()` fetches data on initialization (app.js)
-- **Auto-Sync:** Configurable auto-refresh via `syncConfig` object
-- **Manual Sync:** User can trigger via "Sync" button in header
-- **Sync Indicator:** Visual status indicator shows sync state (syncing/synced/error)
-
-**Column Mapping (Google Sheets → Application):**
-```javascript
-// Expected columns in Google Sheet:
-{
-  "Fin de Prod": "2025-12-20",    // Delivery date
-  "Code cde": "CC25-1001",        // Order ID
-  "STATUT": "En Cours",           // Order status
-  "Client": "SPEBI",              // Client name
-  "Poids": "150",                 // Material weight (kg)
-  "CISAILLE": "00:03:00",         // Shearing duration (HH:MM:SS)
-  "POINCON": "00:02:15",          // Punching duration
-  "PLIAGE": "00:03:45"            // Bending duration
-}
-```
-
-**Time Conversion:** `timeToDecimalHours()` handles:
-- String format "HH:MM:SS"
-- Date objects from Google Sheets
-- Excel serial numbers (day fractions)
-- Direct hour values
-
-**Order Statuses (case-insensitive):**
-- **"En prépa"**: Order ready but no operations placed yet (appears in sidebar)
-- **"Planifiée"**: All operations placed in planning
-- **"En cours"**: Order currently being executed (appears in planning)
-- **"Terminée"**: Completed (filtered out, not displayed)
-- **"Livrée"**: Delivered (filtered out, not displayed)
-
-**Partial Placement Support:**
-Orders with status "En prépa" and some operations placed appear in **both** sidebar (for unplaced ops) AND planning view (for placed ops). This is handled by:
-- `getPlacedOrders()` - Includes "En prépa" commands with ≥1 placed operation (app.js)
-- `getUnplacedOrders()` - Includes "En prépa" commands with ≥1 unplaced operation (app.js)
-
-**Sync Configuration:**
-```javascript
-const syncConfig = {
-    autoSync: true,           // Enable auto-sync
-    intervalMinutes: 5,       // Sync every 5 minutes
-    showIndicator: true,      // Show sync status
-    onError: 'notify'         // Error handling strategy
-};
-```
-
-### View System
-
-The application has **three main views**:
-
-**1. Vue Liste (List View)** - `renderVueListe()`
-   - Tabular display of all orders
-   - Filter by status, client, urgency
-   - Sortable columns (delivery date, status, client)
-   - Quick access to order details
-   - Export to CSV/Excel functionality
-
-**2. Vue Semaine (Week View)** - `renderVueSemaine()`
-   - Overview of multiple weeks (navigable, default weeks 50-52)
-   - Capacity gauges per machine
-   - Command badges per week
-   - Click on week cells to switch to day view
-   - Year navigation support with rollover handling (app.js:119-131)
-
-**3. Vue Journée (Day View)** - `renderVueJournee()`
-   - Detailed hourly timeline:
-     - Monday-Thursday: 07:00-17:00 with lunch break 12:30-13:00
-     - Friday: 07:00-12:00
-   - Multiple operations per machine/day
-   - Drag & drop enabled for:
-     - Moving existing operations between slots
-     - Placing individual operations from sidebar to planning
-   - Capacity indicators per day
-   - Smart gap-finding algorithm (`findFirstAvailableGap()`) for optimal placement
-   - Freeze protection for current/next day (`FREEZE_CONFIG` app.js:62-68)
-
-Current view is tracked in `vueActive` variable ('liste', 'semaine', or 'journee').
-
-### Drag & Drop System
-
-Implemented using HTML5 Drag & Drop API:
-
-**Draggable Elements:**
-- `.operation-slot.draggable` - Placed operations in day view
-- `.sidebar-operation-draggable` - Unplaced operations in sidebar
-
-**Drop Zones:**
-- `.drop-zone` - Hourly time slots in day view
-- Visual feedback during drag (highlight valid drop zones)
-
-**Validation on Drop:**
-1. `canPlaceOperation()` enforces chronological order
-2. Capacity check ensures slot has enough available hours
-3. Gap-finding algorithm positions operation optimally
-4. Rollback on validation failure
-
-**State Management:**
-1. Save old slot data before move
-2. Apply new values temporarily
-3. Validate chronological order + capacity
-4. Commit if valid, rollback if invalid
-
-### Capacity Management & Advanced Features
-
-**Capacity Calculation Functions:**
-- `calculerCapaciteMachine(machine, semaine)` - Weekly capacity
-- `calculerCapaciteJour(machine, jour, semaine)` - Daily capacity (accounts for system events)
-- `getCapacityColorClass(pourcentage)` - Visual color coding
-
-**Capacity Thresholds:**
-```javascript
-// Normal capacity (app.js:31-40)
-ok: 75%        // Green (capacity-ok)
-warning: 95%   // Orange (capacity-warning)
-danger: 100%   // Red (capacity-danger)
-
-// Overbooking allowed up to 105% (app.js:41-51)
-maxPercentage: 105%
-visualIndicator: 'critical'  // Purple/critical styling
-```
-
-**Overtime Management (app.js:52-59):**
-```javascript
-// Available overtime slots
-availableSlots: [
-  { days: ['Lundi', 'Mardi', 'Mercredi', 'Jeudi'],
-    range: '16:30-18:00',
-    maxHours: 1.5 },
-  { days: ['Vendredi'],
-    range: '12:00-14:00',
-    maxHours: 2 }
+commandes = [
+  {
+    id: "CC25-1001",           // From Google Sheets "Code cde"
+    client: "SPEBI",
+    poids: 150,                // Weight in kg
+    materiau: "Aluminium",
+    statut: "En cours",        // En cours | Planifiee | En prepa | Non placee | Terminee | Livree
+    dateLivraison: "2025-12-20",
+    refCdeClient: "REF-123",
+    ressource: "R1",
+    semaineAffectee: "2025-W50",
+    operations: [
+      {
+        id: "cc25-1001-cisaillage-abc123",  // Deterministic ID
+        type: "Cisaillage",                 // Cisaillage | Poinconnage | Pliage
+        dureeTotal: 3.0,                    // Hours (decimal)
+        dureeOriginal: 3.0,
+        dureeOverride: null,                // Manual override value
+        overrideTimestamp: null,
+        progressionReelle: 75,              // 0-100%
+        statut: "En cours",                 // Non placee | Planifiee | En cours | Terminee
+        slots: [
+          {
+            id: "cc25-1001-cisaillage-abc123_slot_1",  // generateSlotId()
+            machine: "Cisaille A",
+            duree: 3.0,
+            semaine: 50,               // ISO week number
+            annee: 2025,
+            jour: "Lundi",             // French day name
+            heureDebut: "09:00",
+            heureFin: "12:00",
+            dateDebut: "2025-12-09T09:00:00.000Z",
+            dateFin: "2025-12-09T12:00:00.000Z",
+            overtime: false
+          }
+        ]
+      }
+      // ... Poinconnage, Pliage
+    ]
+  }
 ]
-maxWeeklyHours: 10,
-maxDailyHours: 2
 ```
 
-**System Events (Maintenance/Closures):**
-- Managed via `systemEvents` array
-- Types: 'maintenance', 'fermeture' (closure), 'conge' (leave)
-- Affects capacity calculations automatically
-- User interface for adding/managing events
-- Visual indicators on planning views
+### Supabase Schema (key tables)
 
-**Freeze Protection (app.js:62-68):**
+**`commandes`** — Orders
+```
+id VARCHAR(50) PK, client_name, date_livraison DATE, statut, materiau, poids DECIMAL,
+ref_cde_client, ressource, semaine_affectee, created_at, updated_at
+```
+
+**`operations`** — 3 per commande (Cisaillage, Poinconnage, Pliage)
+```
+id UUID PK, commande_id FK→commandes, type, duree_total DECIMAL, duree_original,
+duree_override, override_timestamp, progression_reelle, statut, ordre INT, created_at, updated_at
+```
+
+**`slots`** — Time slots for placed operations (1+ per operation)
+```
+id UUID PK, operation_id FK→operations, machine_id FK→machines, machine_name,
+duree DECIMAL, semaine INT, jour VARCHAR, heure_debut TIME, heure_fin TIME,
+date_debut TIMESTAMPTZ, date_fin TIMESTAMPTZ, overtime BOOLEAN, created_at, updated_at
+```
+
+**`machines`** — Machine configuration
+```
+id VARCHAR(50) PK (e.g. "cisaille-a"), name, type (cisaillage|poinconnage|pliage),
+capacity DECIMAL, color VARCHAR(7), active BOOLEAN
+```
+
+**Other tables:** `clients`, `shifts`, `shift_schedules`, `breaks`, `system_events`, `overtime_config`, `overtime_slots`, `overtime_tracker`, `capacity_config`, `capacity_daily_hours`, `sync_metadata`
+
+### Local ↔ Supabase Field Mapping
+
+| Local field | Supabase column | Notes |
+|-------------|----------------|-------|
+| `cmd.client` | `commandes.client_name` | |
+| `cmd.dateLivraison` | `commandes.date_livraison` | |
+| `op.dureeTotal` | `operations.duree_total` | Decimal hours |
+| `slot.machine` | `slots.machine_name` | Display name |
+| `slot.machine` → normalize | `slots.machine_id` | Auto-generated: "Cisaille A" → "cisaille-a" |
+| `slot.heureDebut` | `slots.heure_debut` | TIME format |
+
+---
+
+## app.js — Complete Structure Map (12,406 lines)
+
+### Global State Variables
+
+| Variable | Line | Type | Purpose |
+|----------|------|------|---------|
+| `machinesConfig` | 7 | object | Mutable machine configuration |
+| `scheduleConfig` | 11 | object | Mutable schedule configuration |
+| `SUPABASE_URL` | 16 | const | `https://veyqcnoaiqotikpjfgjq.supabase.co` |
+| `SUPABASE_ANON_KEY` | 17 | const | Supabase public key |
+| `supabaseClient` | 18 | let | Supabase JS client instance |
+| `CLIENT_SESSION_ID` | 21 | const | Unique session ID for echo suppression |
+| `_recentlyModifiedRecords` | 28 | Map | Record ID → timestamp for echo suppression |
+| `REALTIME_IGNORE_WINDOW_MS` | 29 | const | 5000ms |
+| `MACHINES` | 61 | let | `{cisailles: [...], poinconneuses: [...], plieuses: [...]}` |
+| `ALL_MACHINES` | 67 | let | Flat array of all machine names |
+| `HOURS_PER_DAY` | 108 | let | `{Lundi: 8.5, ..., Vendredi: 5}` |
+| `DAYS_OF_WEEK` | 116 | const | `['Lundi','Mardi','Mercredi','Jeudi','Vendredi']` |
+| `TOTAL_HOURS_PER_WEEK` | 117 | let | 39 |
+| `CAPACITY_CONFIG` | 121 | const | Thresholds: ok=75%, warning=95%, danger=100%, critical=105% |
+| `FREEZE_CONFIG` | 152 | const | Current/next day freeze protection |
+| `LUNCH_BREAK` | 187 | let | `{start: 12.5, end: 13.0, duration: 0.5}` |
+| `DUREE_PAR_KG` | 194 | const | `{Cisaillage: 0.02, Poinconnage: 0.015, Pliage: 0.025}` |
+| `vueActive` | 204 | let | `'semaine'` / `'journee'` / `'liste'` |
+| `semaineSelectionnee` | 205 | let | Current ISO week number |
+| `anneeSelectionnee` | 206 | let | Current year |
+| `draggedOperation` | 246 | let | State of currently dragged operation |
+| `commandes` | 249 | let | **MAIN DATA ARRAY** — all orders |
+| `currentSearchQuery` | 255 | let | Sidebar search filter |
+| `systemEvents` | 258 | let | Maintenance/closure events |
+| `_dirtyCommandeIds` | 9700 | Set | Command IDs pending Supabase sync |
+| `REALTIME_DEBUG` | 9695 | const | `false` — set `true` for verbose Realtime logs |
+| `syncManager` | 9584 | const | `DataSyncManager` singleton instance |
+| `historyManager` | 727 | const | `HistoryManager` singleton (undo/redo) |
+
+### Section Map
+
+| Lines | Section | Key Functions |
+|-------|---------|---------------|
+| 1-60 | **Supabase Init & Config** | `initSupabase()`, `markRecordAsModified()`, `isOurOwnRealtimeEvent()` |
+| 61-200 | **Constants & Machine Config** | `MACHINES`, `HOURS_PER_DAY`, `CAPACITY_CONFIG`, `FREEZE_CONFIG`, `DUREE_PAR_KG` |
+| 201-260 | **Navigation & State** | `changeWeek()`, `goToWeekFromDate()` |
+| 261-384 | **Data Migrations** | `migrateMachineNames()`, `migrateOperationOverrideFields()`, `migrateCommandesSemaineAffectee()` |
+| 390-637 | **Data Transform & Utils** | `generateSlotId()`, `timeToDecimalHours()`, `mapGoogleSheetRowToOrder()` |
+| 641-725 | **HistoryManager class** | Undo/Redo (50 states max) |
+| 730-1131 | **Legacy Data & Init** | Demo data, initial load scaffolding |
+| 1137-1310 | **Utility Functions** | `calculerDureeOperation()`, `getWeekNumber()`, `getActiveOrders()`, `getPlacedOrders()`, `getUnplacedOrders()` |
+| 1319-1770 | **Capacity & Gap-Finding** | `calculerCapaciteMachine()`, `calculerCapaciteJour()`, `findFirstAvailableGap()`, `findNextGap()`, `getMachinesByLoadOrder()` |
+| 2033-2277 | **Time Editing & Overrides** | `setOperationTimeOverride()`, `showTimeEditPopup()`, `showModalTimeEdit()` |
+| 2285-2452 | **Validation & Constraints** | `validateOperationOrder()`, `canPlaceOperation()`, `checkOperationOverlap()`, `getDateFromWeekDay()` |
+| 2459-2688 | **Vue Semaine (Week View)** | `renderVueSemaine()` |
+| 2695-3108 | **Vue Journee (Day View)** | `renderVueJournee()` |
+| 3120-3516 | **Sidebar Rendering** | `renderSidebarContent()`, `renderCommandesNonPlacees()`, `initializeSidebarSearch()`, `replanifierOperationsSuivantes()` |
+| 3663-4054 | **Drag & Drop System** | `initDragAndDrop()`, `handleSidebarDrop()`, `handleDragStart()`, `handleWeekCellDrop()`, `desaffecterCommande()` |
+| 4055-4501 | **handleDrop() — Core Drop Logic** | Validates chrono order, finds gaps, creates slots, handles overtime splits, rollback on error |
+| 4510-4810 | **Automatic Placement** | `placerAutomatiquement()`, `showCommandeDetails()` |
+| 4938-4988 | **Overtime Dialogs** | `showOvertimeConfirmDialog()` |
+| 4989-5719 | **DataSyncManager class** | Full sync system (see Sync section below) |
+| 5800-6471 | **System Events** | `saveSystemEvents()`, `loadSystemEvents()`, `expandMultiDayEvent()`, maintenance/closure modals |
+| 6475-6748 | **Vue Liste (List View)** | `renderVueListe()`, `unplanCommand()`, column sorting |
+| 6751-6804 | **View Navigation** | `toggleVue()`, `refresh()`, `updateCurrentTime()` |
+| 6811-6874 | **Event Handlers Init** | `initEventHandlers()` — all button/keyboard listeners |
+| 6885-7360 | **Urgent Insertion (Simple)** | `showUrgentInsertionModal()`, scenarios (Normal, Earliest, Split) |
+| 7362-8800 | **Urgent Insertion (Smart)** | `calculateSmartInsertionPlan()`, displacement cascade, `splitAtNormalHoursEnd()`, conflict resolution |
+| 9516-9580 | **Print Config** | `showPrintConfig()`, `handlePrint()` |
+| 9589-9688 | **Initialization** | `async init()` — main entry point |
+| 9695-10067 | **Dirty Tracking & Realtime** | `markCommandeDirty()`, `saveData()`, `saveDataImmediate()`, all `handleRealtime*Change()` handlers |
+| 10118-10640 | **Machine Manager** | `loadMachinesConfig()`, `openMachineManager()`, machine CRUD UI |
+| 10647-11544 | **Schedule Manager** | `loadScheduleConfig()`, shifts/breaks CRUD, `buildScheduleConfig()` |
+| 11627-12397 | **Semi-Auto Planning Modal** | `openPlanifierSemiAutoModal()`, 2-step wizard, time slider, placement calculation |
+
+---
+
+## DataSyncManager — Detailed (Lines 4989-5719)
+
+| Method | Lines | Purpose |
+|--------|-------|---------|
+| `constructor()` | 4990-4996 | Init state, storage key `etm_commandes_v2` |
+| `init()` | 4999-5040 | Try Supabase → fallback localStorage → migrations → refresh |
+| `loadLocalData()` | 5043-5070 | Parse localStorage JSON |
+| `loadCommandesFromSupabase()` | 5073-5142 | Fetch commandes+operations+slots, reconstruct nested structure |
+| `upsertCommandeToSupabase(cmd)` | 5161-5273 | **Core write**: upsert commande → operations → cleanup orphan slots → upsert slots |
+| `deleteSlotFromSupabase(slotId)` | 5276-5291 | Delete single slot by ID |
+| `deleteAllSlotsForOperation(opId)` | 5294-5309 | Delete all slots for operation |
+| `syncWithSupabase()` | 5347-5376 | Periodic full sync (every 10 min) |
+| `mergeData(local, remote)` | 5386-5503 | Remote = master for metadata, local = master for slots/planning |
+| `saveLocalData()` | 5506-5525 | localStorage + trigger `saveToSupabaseDebounced()` |
+| `saveToSupabaseDebounced()` | 5528-5535 | 500ms debounce before Supabase write |
+| `saveAllToSupabase()` | 5538-5559 | Write only `_dirtyCommandeIds` to Supabase |
+
+### Orphan Slot Cleanup (in `upsertCommandeToSupabase`)
+
+When a slot is moved via drag & drop, the old slot ID changes. The upsert function:
+1. SELECT existing slot IDs from Supabase for each operation
+2. Compare with local slot IDs
+3. DELETE orphaned IDs (exist in Supabase but not locally)
+4. UPSERT current local slots
+
+This prevents ghost/duplicate slots on other clients.
+
+---
+
+## supabase.js — Module (568 lines)
+
+### Read Functions
+| Function | Purpose |
+|----------|---------|
+| `fetchCommandesFromSupabase()` | Fetch commandes with nested operations and slots |
+| `fetchMachinesFromSupabase()` | Fetch active machines |
+| `fetchSystemEventsFromSupabase()` | Fetch maintenance/closure events |
+| `fetchScheduleConfigFromSupabase()` | Fetch shifts + schedules + breaks |
+| `fetchOvertimeConfigFromSupabase()` | Fetch overtime config + slots |
+
+### Write Functions
+| Function | Purpose |
+|----------|---------|
+| `saveSlotToSupabase(slot)` | Upsert single slot |
+| `deleteSlotFromSupabase(slotId)` | Delete single slot |
+| `updateOperationInSupabase(opId, updates)` | Update operation fields |
+| `updateCommandeInSupabase(cmdId, updates)` | Update commande fields |
+| `saveMachineToSupabase(machine)` | Upsert machine |
+| `deleteMachineFromSupabase(machineId)` | Delete machine |
+| `saveSystemEventToSupabase(event)` | Upsert system event |
+| `deleteSystemEventFromSupabase(eventId)` | Delete system event |
+| `saveShiftToSupabase(shift, schedules)` | Upsert shift + schedules |
+| `saveBreakToSupabase(breakItem)` | Upsert break |
+| `saveOvertimeConfigToSupabase(config, slots)` | Replace overtime config |
+
+### Realtime Subscriptions
+| Function | Table |
+|----------|-------|
+| `subscribeToCommandes(cb)` | commandes |
+| `subscribeToOperations(cb)` | operations |
+| `subscribeToSlots(cb)` | slots |
+| `subscribeToMachines(cb)` | machines |
+| `subscribeToSystemEvents(cb)` | system_events |
+| `subscribeToShifts(cb)` | shifts |
+| `subscribeToShiftSchedules(cb)` | shift_schedules |
+| `subscribeToBreaks(cb)` | breaks |
+| `subscribeToOvertimeConfig(cb)` | overtime_config |
+| `subscribeToOvertimeSlots(cb)` | overtime_slots |
+
+`initAllRealtimeSubscriptions(handlers)` subscribes to all 10 tables.
+
+### Realtime Status UI
+`updateRealtimeStatusUI(status)` updates `#realtimeStatus` div — green (connected), orange (disconnected), red (error).
+
+---
+
+## Realtime Echo Suppression
+
 ```javascript
-const FREEZE_CONFIG = {
-    currentDay: true,           // Freeze current day
-    nextDay: 'partial',         // Partially freeze next day
-    freezeHorizon: 24,          // Hours ahead to freeze
-    overrideWarning: "⚠️ ATTENTION: Modification de la journée en cours..."
-};
+const _recentlyModifiedRecords = new Map();  // recordId → timestamp
+const REALTIME_IGNORE_WINDOW_MS = 5000;
+
+function markRecordAsModified(recordId) {
+    _recentlyModifiedRecords.set(recordId, Date.now());
+    setTimeout(() => _recentlyModifiedRecords.delete(recordId), 6000);
+}
+
+function isOurOwnRealtimeEvent(recordId) {
+    const modifiedAt = _recentlyModifiedRecords.get(recordId);
+    return modifiedAt && (Date.now() - modifiedAt) < REALTIME_IGNORE_WINDOW_MS;
+}
 ```
 
-**Urgent Order Insertion:**
-- Dedicated "INSÉRER COMMANDE URGENTE" button in sidebar
-- Algorithm finds earliest possible slots across all machines
-- Pushes existing operations later if needed (reschedules within limits)
-- Respects `RESCHEDULE_WINDOW` constraints (app.js:70-74)
-- Visual confirmation of affected operations
+Called in all 3 Realtime handlers. `REALTIME_DEBUG = false` controls verbose logging.
 
-### Automatic Placement Algorithm
+---
 
-`placerAutomatiquement(commandeId)` implementation:
+## Dirty Tracking System
 
-1. **Validate order structure** with `validateOperationOrder()`
-2. **For each operation** (in chronological sequence):
-   - Get compatible machines for operation type
-   - Search through weeks (current + future)
-   - For each potential slot:
-     - Check capacity availability
-     - Validate chronological constraints with `canPlaceOperation()`
-     - Use `findFirstAvailableGap()` for optimal time slot
-   - Place in first valid slot with sufficient capacity
-3. **Update command status** to "Planifiée"
-4. **Refresh views** to show placement
+```javascript
+const _dirtyCommandeIds = new Set();
 
-The algorithm **respects chronological order** - operations are placed sequentially and only in slots that don't violate timing constraints.
+function markCommandeDirty(commandeId)    // Add to dirty set
+function markAllCommandesDirty()           // Mark all (for bulk ops: undo, import)
+function saveData(commandeId)              // Mark dirty + saveLocalData (debounced)
+function saveDataImmediate(commandeId)     // Mark dirty + save NOW (no debounce)
+```
 
-**Advanced Placement Features:**
-- **Load balancing:** `findBestMachineSlot()` distributes work across similar machines
-- **Gap optimization:** Fills small gaps first to maximize capacity utilization
-- **Delivery date awareness:** Prioritizes orders close to delivery date
-- **Manual adjustment:** Users can drag & drop after automatic placement
+`handleDrop()` uses `saveDataImmediate()` for fast sync. Other operations use `saveData()`.
 
-## Critical Functions Reference
+---
 
-When modifying scheduling logic, these are the **key functions**:
+## Production Capacity
 
-### Order Validation
-- `validateOperationOrder(commande)` - Validates 3 operations exist in correct sequence
-- `canPlaceOperation(commande, operation, targetWeek, targetDay, targetStartTime)` - Validates chronological timing
-- `checkOperationOverlap(machine, jour, semaine, startTime, endTime, excludeSlotId)` - Prevents double-booking
+| Day | Hours | Schedule |
+|-----|-------|----------|
+| Mon-Thu | 8.5h | 07:30-16:30, lunch 12:30-13:00 |
+| Friday | 5h | 07:00-12:00 |
+| **Weekly** | **39h** | |
 
-### Placement Logic
-- `findFirstAvailableGap(machine, jour, semaine, durationNeeded, minTimeStr)` - Finds optimal gap, optionally starting after minTimeStr
-- `findBestMachineSlot(operation, cmd, machinesList)` - Load-balanced slot finder with chronological checks
-- `placerAutomatiquement(commandeId)` - Auto-placement algorithm
-- `handleDrop(e)` - Drag & drop handler with validation
+### Overtime
+| Day | Slot | Max |
+|-----|------|-----|
+| Mon-Thu | 16:30-18:00 | 1.5h |
+| Friday | 12:00-14:00 | 2h |
+| Weekly limit | | 10h |
 
-### Capacity Calculations
-- `calculerCapaciteMachine(machine, semaine)` - Weekly capacity with system events
-- `calculerCapaciteJour(machine, jour, semaine)` - Daily capacity accounting for events/closures
-- `getCapacityColorClass(pourcentage)` - Visual color coding (ok/warning/danger/critical)
-- `calculateOvertimeUsage(semaine)` - Tracks overtime hours used
+### Capacity Thresholds
+- **ok** (green): 0-75%
+- **warning** (orange): 76-95%
+- **danger** (red): 96-100%
+- **critical** (purple): 101-105% (overbooking allowed)
+
+---
+
+## handleDrop() — Core Placement Logic (Line 4055)
+
+The most complex function in the app. Handles drag & drop of operations.
+
+### Flow
+1. Read target machine/day/week from drop zone attributes
+2. Find the command and operation being moved
+3. Backup original slots (`slotsBackup`, `originalSlots`)
+4. Clear `operation.slots = []`
+5. Call `findFirstAvailableGap()` to find placement
+6. If gap found:
+   - Check overtime overflow with `detectOvertimeOverflow()`
+   - If overtime needed → confirm dialog → accept or split
+   - Create new slot(s) with `generateSlotId()`
+   - Update operation/command statut
+   - Call `replanifierOperationsSuivantes()` if needed
+   - Render views + `saveDataImmediate(cmd.id)`
+7. If no gap → restore from backup + alert
+
+### Branching (5 save paths)
+| Line | Branch | Description |
+|------|--------|-------------|
+| 4286 | Split (overtime refused) | Fragment slots via `splitAtNormalHoursEnd()` |
+| 4332 | Normal placement | Single slot, no overtime |
+| 4409 | Overtime accepted | Single slot with overtime |
+| 4446 | Partial overtime split | Some overtime refused |
+| 4484 | Direct split | No overtime possible |
+
+All 5 call `saveDataImmediate(cmd.id)` for immediate Supabase sync.
+
+### Fragment Slots
+When an operation doesn't fit in one day, `splitAtNormalHoursEnd()` splits it into fragments. Each fragment gets a deterministic ID via `generateSlotId(operation.id, fragments.slice(0, index))`.
+
+---
+
+## Initialization Flow (Line 9589)
+
+```
+init()
+  1. initSupabase()                    → Create Supabase client
+  2. Set semaineSelectionnee/annee     → Current week/year
+  3. loadMachinesConfig()              → From Supabase or localStorage
+  4. loadScheduleConfig()              → From Supabase or localStorage
+  5. Start 60s clock                   → updateCurrentTime() every minute
+  6. loadSystemEvents()                → Maintenance/closures
+  7. syncManager.init()                → Load data (Supabase primary, localStorage fallback)
+     ├── loadCommandesFromSupabase()   → Fetch all active commandes
+     ├── migrations                    → migrateMachineNames(), etc.
+     └── refresh()                     → Render current view
+  8. initAllRealtimeSubscriptions()    → 10 WebSocket channels
+  9. initializeSidebarSearch()         → Search input listeners
+```
+
+---
+
+## Key Functions Quick Reference
+
+### Validation
+| Function | Line | Purpose |
+|----------|------|---------|
+| `validateOperationOrder(cmd)` | 2292 | Ensure 3 ops in correct sequence |
+| `canPlaceOperation(cmd, op, week, day, time, year)` | 2327 | Validate chronological timing |
+| `checkOperationOverlap(machine, day, week, start, end, excludeId)` | ~2430 | Prevent double-booking |
+
+### Placement
+| Function | Line | Purpose |
+|----------|------|---------|
+| `findFirstAvailableGap(machine, day, week, duration, minTime, allowOT, year)` | 1513 | Core gap-finding algorithm |
+| `findNextGap(machine, day, week, minTime, year)` | 1658 | Find next gap on specific machine/day |
+| `getMachinesByLoadOrder(machines, week, year)` | 1627 | Sort machines by load (least loaded first) |
+| `placerAutomatiquement(commandeId)` | 4510 | Auto-place all 3 operations |
+| `handleDrop(e)` | 4055 | Drag & drop handler |
+| `splitAtNormalHoursEnd(op, machine, week, year, day, startHour)` | ~8700 | Split operation across days |
+| `generateSlotId(operationId, existingSlots)` | 390 | Deterministic slot IDs |
+
+### Capacity
+| Function | Line | Purpose |
+|----------|------|---------|
+| `calculerCapaciteMachine(machine, week, year)` | 1319 | Weekly capacity (hours used) |
+| `calculerCapaciteJour(machine, day, week, year)` | 1343 | Daily capacity |
+| `getCapacityColorClass(percentage)` | 1384 | Color class for capacity gauge |
+| `calculateEndTimeWithBreaks(startDec, duration, day)` | ~1440 | End time accounting for lunch |
+| `detectOvertimeOverflow(startDec, duration, day)` | ~1470 | Check if overtime needed |
 
 ### Rendering
-- `renderVueListe()` - List view with filters and sorting
-- `renderVueSemaine()` - Week view grid with capacity gauges
-- `renderVueJournee()` - Day view with hourly timeline and drag & drop
-- `renderCommandesNonPlacees()` - Sidebar unplaced orders with drag support
+| Function | Line | Purpose |
+|----------|------|---------|
+| `renderVueSemaine()` | 2459 | Week view with capacity gauges |
+| `renderVueJournee()` | 2695 | Day view with hourly timeline |
+| `renderVueListe()` | 6538 | Table view with sorting |
+| `renderCommandesNonPlacees(query)` | 3402 | Sidebar unplaced orders |
+| `refreshUIOnly()` | ~9745 | Re-render without saving |
 
-### Data Synchronization
-- `loadOrdersFromGoogleSheets()` - Fetches and parses Google Sheets data
-- `mapGoogleSheetRowToOrder(row)` - Converts sheet rows to application format
-- `syncNow()` - Manual sync trigger
-- `startAutoSync()` / `stopAutoSync()` - Auto-sync management
+### Data Sync
+| Function | Line | Purpose |
+|----------|------|---------|
+| `saveData(cmdId)` | 9716 | Mark dirty + save (debounced 500ms) |
+| `saveDataImmediate(cmdId)` | 9730 | Mark dirty + save NOW |
+| `markCommandeDirty(cmdId)` | 9702 | Add to `_dirtyCommandeIds` |
+| `upsertCommandeToSupabase(cmd)` | 5161 | Full write: cmd + ops + slots + orphan cleanup |
 
 ### Utilities
-- `calculerDureeOperation(type, poids)` - Calculate duration for new orders
-- `timeToDecimalHours(timeStr)` - Convert HH:MM:SS or date to hours
-- `getDateFromWeekDay(weekNumber, dayName, timeStr)` - ISO week → Date conversion
-- `getWeekNumber(date)` - Date → ISO week number
-- `formatHours(hours)` - Display formatting (e.g., "3.5h" or "3h30")
+| Function | Line | Purpose |
+|----------|------|---------|
+| `timeToDecimalHours(timeStr)` | 398 | HH:MM:SS → decimal hours |
+| `getWeekNumber(date)` | ~1150 | Date → ISO week number |
+| `getDateFromWeekDay(week, day, time, year)` | ~2440 | Week+day+time → Date |
+| `formatHours(hours)` | ~2020 | 3.5 → "3h30" |
+| `formatDecimalTime(decimal)` | 4049 | 9.5 → "09:30" |
+| `escapeHtml(text)` | 3453 | XSS protection |
 
-### System Events
-- `addSystemEvent(event)` - Add maintenance/closure event
-- `getSystemEventsForDay(machine, jour, semaine)` - Get events affecting a specific day
-- `calculateAvailableHours(machine, jour, semaine)` - Base hours minus events
+---
 
-## Common Modification Scenarios
+## Order Statuses
 
-**Modifying duration coefficients:**
-```javascript
-// Edit app.js:104-108
-const DUREE_PAR_KG = {
-    'Cisaillage': 0.02,    // Change this
-    'Poinçonnage': 0.015,
-    'Pliage': 0.025
-};
-```
+| Status | Visible | Where |
+|--------|---------|-------|
+| `En prepa` | Yes | Sidebar (unplaced ops) + Planning (placed ops) |
+| `Non placee` | Yes | Sidebar only |
+| `En cours` | Yes | Planning + sidebar (partial) |
+| `Planifiee` | Yes | Planning only |
+| `Terminee` | No | Filtered out |
+| `Livree` | No | Filtered out |
 
-**Adding a new machine:**
-```javascript
-// Edit app.js:6-16
-const MACHINES = {
-    cisailles: ['Cisaille A', 'Cisaille B', 'Cisaille C'],  // Add here
-    poinconneuses: ['Poinçonneuse A', 'Poinçonneuse B'],
-    plieuses: ['Plieuse Lo', 'Plieuse Mik', 'Plieuse Mok']
-};
-```
+Status checks are **case-insensitive** (`toLowerCase().trim()`).
 
-**Changing working hours:**
-```javascript
-// Edit app.js:18-24
-const HOURS_PER_DAY = {
-    'Lundi': 8.5,      // Modify here
-    'Mardi': 8.5,
-    // ...
-};
-```
+---
 
-**Changing overtime limits:**
-```javascript
-// Edit app.js:52-59
-overtime: {
-    maxWeeklyHours: 10,   // Change weekly limit
-    maxDailyHours: 2      // Change daily limit
-}
-```
+## Supabase Configuration
 
-**Adding a material type:**
-```html
-<!-- Edit index.html (form section) -->
-<select id="orderMaterial">
-    <option value="Aluminium">Aluminium</option>
-    <option value="Galvanisé">Galvanisé</option>
-    <option value="Inox">Inox</option> <!-- Add here -->
-</select>
-```
+| Setting | Value |
+|---------|-------|
+| URL | `https://veyqcnoaiqotikpjfgjq.supabase.co` |
+| Anon Key | `sb_publishable_wa6y4sYvbvKtzSFBzw7lBg_CYdxXr1P` |
+| Realtime | Enabled on: commandes, operations, slots, machines, system_events, shifts, shift_schedules, breaks, overtime_config, overtime_slots |
+| RLS | Disabled (no auth for now) |
 
-**Changing color scheme:**
-```css
-/* Edit styles.css :root section */
-:root {
-    --color-cisaillage: #28a745;    /* Green for shearing */
-    --color-poinconnage: #fd7e14;   /* Orange for punching */
-    --color-pliage: #6f42c1;        /* Purple for bending */
-}
-```
+### Google Sheets → Supabase Sync
 
-**Configuring Google Sheets connection:**
-```javascript
-// Edit app.js (top constants)
-const GOOGLE_SHEET_ID = 'your-sheet-id-here';
-const GOOGLE_API_KEY = 'your-api-key-here';
-const SHEET_NAME = 'ETM_DATA';  // Sheet tab name
-```
+Google Apps Script runs every 5 minutes:
+1. Compares MD5 hash of each row with cache
+2. Batch upserts changed rows (commandes + operations)
+3. Filters on last 2 months for performance
+
+| Sheet Column | Index | Supabase Table.Field |
+|-------------|-------|---------------------|
+| Fin de Prod | 0 | commandes.date_livraison |
+| Code cde | 1 | commandes.id |
+| STATUT | 2 | commandes.statut |
+| Client | 3 | commandes.client_name |
+| Poids | 4 | commandes.poids |
+| CISAILLE | 5 | operations.duree_total (Cisaillage) |
+| POINCON | 6 | operations.duree_total (Poinconnage) |
+| PLIAGE | 7 | operations.duree_total (Pliage) |
+| Ref cde client | 8 | commandes.ref_cde_client |
+
+---
+
+## Known Fixes & Architecture Decisions
+
+### Phase 1 — Realtime Loop Prevention
+- **Problem:** Realtime handlers called `refresh()` → `saveLocalData()` → re-upload to Supabase → ping-pong loop
+- **Fix:** Created `refreshUIOnly()` (no save), `saveLocalStorageOnly()`, `debouncedRealtimeUpdate()`. Handlers only update UI + localStorage.
+
+### Phase 1 — Dirty Tracking
+- **Problem:** `saveAllToSupabase()` uploaded ALL 850 commandes on every save
+- **Fix:** `_dirtyCommandeIds` Set tracks only modified commands. `markCommandeDirty(id)` adds IDs. `saveAllToSupabase()` returns early if set is empty.
+
+### Phase 2 — Orphan Slot Cleanup
+- **Problem:** `handleDrop()` clears `operation.slots = []` then creates new slot with new ID. Old slot never deleted from Supabase → ghost/duplicate slots on other clients.
+- **Fix:** `upsertCommandeToSupabase()` now SELECTs existing Supabase slot IDs, compares with local, DELETEs orphans before upserting.
+
+### Phase 2 — Fragment Slot IDs
+- **Problem:** 3 branches in `handleDrop()` created fragment slots (via `splitAtNormalHoursEnd()`) without IDs. `upsertCommandeToSupabase()` filtered out slots without IDs → fragments never persisted.
+- **Fix:** Added `id: generateSlotId(operation.id, fragments.slice(0, index))` to all 3 fragment `.map()` calls.
+
+### Phase 2 — Debounce Optimization
+- Save debounce: 2000ms → 500ms
+- `_isSaving` guard: 3000ms → 1500ms
+- `handleDrop()` uses `saveDataImmediate()` (no debounce) for instant sync
+
+### Console Noise Reduction
+- `REALTIME_DEBUG = false` silences `🔇 Realtime ignore` logs
+- Set to `true` in console for debugging
+
+---
 
 ## Important Constraints
 
-1. **No backend:** All data is in-memory, but synced with Google Sheets
-2. **ISO week-based planning:** Uses ISO 8601 week numbering with year rollover
-3. **French language:** All UI text, dates, and time formats are in French
-4. **Tablet/Desktop only:** Optimized for tablets 10"+ and desktop, not mobile
-5. **Chronological order enforcement:** Cannot be disabled or bypassed
-6. **Operation order is immutable:** Cisaillage → Poinçonnage → Pliage sequence must be maintained
-7. **Lunch break enforcement:** 30-minute break from 12:30-13:00 (Mon-Thu) in gap-finding algorithm
-8. **Partial placement support:** Orders can have some operations placed and others in sidebar
-9. **System events impact capacity:** Maintenance/closures automatically reduce available hours
-10. **Freeze protection:** Current/next day modifications require override confirmation
-
-## Known Issues & Recent Fixes
-
-**Issue: Empty Sidebar (Fixed)**
-- **Problem:** "Commandes à placer" sidebar was empty despite having "En prépa" orders
-- **Fix:** Case-insensitive status check + validation that at least one operation has no slots
-
-**Issue: "En Cours" Orders Not Appearing (Fixed)**
-- **Problem:** Only 2 out of 7 active orders appeared in planning view
-- **Fix:** Case-insensitive status comparison using `toLowerCase().trim()`
-
-**Issue: Operations Not Appearing After Manual Placement (Fixed)**
-- **Problem:** Operations placed via drag & drop from sidebar didn't appear until all 3 were placed
-- **Fix:** Include "En prépa" orders with at least one placed operation in `getPlacedOrders()`
-
-**Issue: Empty Command Cards in Sidebar (Fixed)**
-- **Problem:** Cards appeared with no operations to display
-- **Fix:** Build operations HTML first, skip card if empty
-
-**Issue: Google Sheets Integration (Implemented)**
-- **Previous:** Used embedded CSV data (legacy)
-- **Current:** Live connection to Google Sheets with auto-sync
-- **Features:** Real-time data loading, sync indicator, manual/auto sync, error handling
-
-## Future Roadmap (V3)
-
-The README.md describes a planned React rewrite with:
-- **Backend:** Node.js/Express API
-- **Database:** PostgreSQL
-- **Authentication:** JWT
-- **Real-time:** WebSockets
-- **Gantt:** DHTMLX Gantt Pro integration
-- **PWA:** Offline-first architecture
-- **Advanced features:** ML-based duration prediction, IoT sensor integration
-
-**This V2 is a prototype/mockup** - prioritize clarity and demonstration over production patterns.
-
-## Testing Approach
-
-Since this is a mockup with no test framework, manually verify:
-
-- **Chronological order:** Try placing operations out of sequence (should be blocked)
-- **Capacity calculations:** Verify with different order weights and system events
-- **Drag & drop:** Test across different machines, days, and weeks
-- **Friday constraint:** Ensure only 5h capacity (vs 8.5h other days)
-- **Automatic placement:** Test with urgent orders (< 5 days to delivery)
-- **Google Sheets sync:** Verify data loads correctly, sync indicator works
-- **Overtime tracking:** Ensure overtime limits are respected
-- **Freeze protection:** Confirm warnings appear when modifying current day
-- **System events:** Verify maintenance/closures reduce capacity correctly
-- **Partial placement:** Check orders with some ops placed appear in both sidebar and planning
-
-## Console Logging
-
-The application includes diagnostic logging:
-
-```javascript
-// Data loading
-console.log('📊 Loaded X orders from Google Sheets');
-console.log('📋 Status counts:', statusCounts);
-console.log('⚠️ Unplaced orders:', unplacedOrders.length);
-
-// Validation
-console.log('✅ Order validation passed');
-console.warn('⚠️ Cannot place operation: reason');
-
-// Sync status
-console.log('🔄 Syncing with Google Sheets...');
-console.log('✅ Sync completed successfully');
-console.error('❌ Sync failed:', error);
-```
-
----
-
-# ETM PROD V2 - Contexte Intégration Supabase
-
-## Résumé du projet
-
-ETM PROD V2 est une application de planification de production pour un atelier de tôlerie (aluminium et acier galvanisé) dans l'industrie des fenêtres/portes. L'application gère 3 processus séquentiels obligatoires : Cisaillage → Poinçonnage → Pliage.
-
-### Stack technique actuelle
-- **Frontend** : Vanilla HTML5, CSS3, JavaScript ES6+ (pas de framework)
-- **Données source** : Google Sheets (saisie par Magali)
-- **Cache local** : localStorage
-- **Hébergement** : GitHub Pages
-
----
-
-## Ce qui a été mis en place : Synchro Google Sheets → Supabase
-
-### Architecture de données
-
-```
-Google Sheets (source de vérité - Magali saisit)
-       │
-       ▼ [Trigger toutes les 5 min]
-Google Apps Script (syncIfChanged)
-       │
-       ▼ [Batch upsert - 2 requêtes max]
-Supabase PostgreSQL (base centralisée)
-       │
-       ▼ [À implémenter : Realtime]
-ETM PROD V2 (app web)
-```
-
-### Credentials Supabase (déjà configurés)
-
-```javascript
-const SUPABASE_URL = 'https://veyqcnoaiqotikpjfgjq.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_wa6y4sYvbvKtzSFBzw7lBg_CYdxXr1P';
-```
-
-### Schéma Supabase (15 tables)
-
-Les tables principales :
-
-#### Table `commandes`
-```sql
-CREATE TABLE commandes (
-    id VARCHAR(50) PRIMARY KEY,  -- ex: "CC25-1001"
-    client_id UUID REFERENCES clients(id),
-    client_name VARCHAR(255) NOT NULL,
-    date_livraison DATE,
-    statut VARCHAR(50) DEFAULT 'En cours' CHECK (statut IN ('En cours', 'Planifiée', 'En prépa', 'Livrée', 'Terminée')),
-    materiau VARCHAR(100),
-    poids DECIMAL(10,2) DEFAULT 0,
-    ref_cde_client VARCHAR(100),
-    ressource VARCHAR(50),
-    semaine_affectee VARCHAR(10),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-#### Table `operations`
-```sql
-CREATE TABLE operations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    commande_id VARCHAR(50) REFERENCES commandes(id) ON DELETE CASCADE,
-    type VARCHAR(50) NOT NULL CHECK (type IN ('Cisaillage', 'Poinçonnage', 'Pliage')),
-    duree_total DECIMAL(10,4) DEFAULT 0,  -- en heures décimales
-    duree_original DECIMAL(10,4) DEFAULT 0,
-    duree_override DECIMAL(10,4),
-    override_timestamp TIMESTAMPTZ,
-    progression_reelle DECIMAL(5,2) DEFAULT 0,
-    statut VARCHAR(50) DEFAULT 'Non placée' CHECK (statut IN ('Non placée', 'Planifiée', 'En cours', 'Terminée')),
-    ordre INT DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-#### Table `slots` (créneaux d'exécution)
-```sql
-CREATE TABLE slots (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    operation_id UUID REFERENCES operations(id) ON DELETE CASCADE,
-    machine_id VARCHAR(50) REFERENCES machines(id),
-    machine_name VARCHAR(100) NOT NULL,
-    duree DECIMAL(10,4) NOT NULL,
-    semaine INT NOT NULL,
-    jour VARCHAR(20) NOT NULL,
-    heure_debut TIME NOT NULL,
-    heure_fin TIME NOT NULL,
-    date_debut TIMESTAMPTZ NOT NULL,
-    date_fin TIMESTAMPTZ NOT NULL,
-    overtime BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-#### Table `machines`
-```sql
-CREATE TABLE machines (
-    id VARCHAR(50) PRIMARY KEY,  -- ex: "cisaille-a"
-    name VARCHAR(100) NOT NULL,
-    type VARCHAR(50) NOT NULL CHECK (type IN ('cisaillage', 'poinconnage', 'pliage')),
-    capacity DECIMAL(4,2) DEFAULT 8.5,
-    color VARCHAR(7) DEFAULT '#10b981',
-    active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-Données machines initiales :
-- cisaille-a, cisaille-b (type: cisaillage)
-- poinconneuse-m, poinconneuse-t (type: poinconnage)
-- plieuse-lo, plieuse-mik, plieuse-mok (type: pliage)
-
-### Autres tables disponibles
-- `clients` - Liste des clients
-- `shifts` - Équipes (jour)
-- `shift_schedules` - Horaires par jour
-- `breaks` - Pauses (déjeuner)
-- `system_events` - Maintenance/fermetures
-- `overtime_config` - Configuration heures sup
-- `overtime_slots` - Créneaux heures sup
-- `overtime_tracker` - Suivi heures sup
-- `capacity_config` - Configuration capacité
-- `capacity_daily_hours` - Heures par jour
-- `sync_metadata` - Métadonnées de synchronisation
-
----
-
-## Google Apps Script (synchro en place)
-
-Le script synchronise Google Sheets → Supabase toutes les 5 minutes.
-
-### Fonctionnement
-1. Compare le hash MD5 de chaque ligne avec le cache
-2. Ne synchronise que les lignes modifiées (batch upsert)
-3. Filtre sur les 2 derniers mois pour performance
-4. 2 requêtes max par sync (commandes + opérations)
-
-### Mapping Google Sheets → Supabase
-
-| Colonne Sheet | Index | Table Supabase | Champ |
-|---------------|-------|----------------|-------|
-| Fin de Prod | 0 | commandes | date_livraison |
-| Code cde | 1 | commandes | id |
-| STATUT | 2 | commandes | statut |
-| Client | 3 | commandes | client_name |
-| Poids | 4 | commandes | poids |
-| CISAILLE | 5 | operations | duree_total (type='Cisaillage') |
-| POINCON | 6 | operations | duree_total (type='Poinçonnage') |
-| PLIAGE | 7 | operations | duree_total (type='Pliage') |
-| Réf cde client | 8 | commandes | ref_cde_client |
-
-### Script Google Apps Script complet
-
-Voir fichier : `etm_sync_final.gs` (dans les outputs)
-
----
-
-## Prochaine étape : Intégration Realtime dans l'app
-
-### Objectif
-Remplacer la lecture Google Sheets par Supabase avec mise à jour temps réel.
-
-### Plan d'implémentation
-
-#### Étape 1 : Ajouter le SDK Supabase
-
-Dans `index.html` :
-```html
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-```
-
-#### Étape 2 : Créer le module Supabase
-
-Créer `supabase.js` :
-```javascript
-// Configuration
-const SUPABASE_URL = 'https://veyqcnoaiqotikpjfgjq.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_wa6y4sYvbvKtzSFBzw7lBg_CYdxXr1P';
-
-// Client Supabase
-const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-// Charger les commandes avec leurs opérations
-async function fetchCommandes() {
-    const { data, error } = await supabase
-        .from('commandes')
-        .select(`
-            *,
-            operations (*)
-        `)
-        .in('statut', ['En cours', 'Planifiée', 'En prépa'])
-        .order('date_livraison', { ascending: true });
-
-    if (error) throw error;
-    return data;
-}
-
-// Charger les machines
-async function fetchMachines() {
-    const { data, error } = await supabase
-        .from('machines')
-        .select('*')
-        .eq('active', true);
-
-    if (error) throw error;
-    return data;
-}
-
-// Charger les slots (placements)
-async function fetchSlots() {
-    const { data, error } = await supabase
-        .from('slots')
-        .select('*');
-
-    if (error) throw error;
-    return data;
-}
-```
-
-#### Étape 3 : Configurer Realtime
-
-```javascript
-// S'abonner aux changements sur commandes
-function subscribeToCommandes(callback) {
-    return supabase
-        .channel('commandes-changes')
-        .on('postgres_changes',
-            { event: '*', schema: 'public', table: 'commandes' },
-            (payload) => {
-                console.log('Commande changée:', payload);
-                callback(payload);
-            }
-        )
-        .subscribe();
-}
-
-// S'abonner aux changements sur opérations
-function subscribeToOperations(callback) {
-    return supabase
-        .channel('operations-changes')
-        .on('postgres_changes',
-            { event: '*', schema: 'public', table: 'operations' },
-            (payload) => {
-                console.log('Opération changée:', payload);
-                callback(payload);
-            }
-        )
-        .subscribe();
-}
-```
-
-#### Étape 4 : Modifier app.js
-
-Remplacer les fonctions de chargement de données :
-
-```javascript
-// Ancien code (Google Sheets)
-// async function loadOrdersFromGoogleSheets() { ... }
-
-// Nouveau code (Supabase)
-async function loadOrders() {
-    try {
-        const commandes = await fetchCommandes();
-
-        // Transformer au format attendu par l'app
-        const orders = commandes.map(cmd => ({
-            id: cmd.id,
-            client: cmd.client_name,
-            dateLivraison: cmd.date_livraison,
-            statut: cmd.statut,
-            poids: cmd.poids,
-            refClient: cmd.ref_cde_client,
-            operations: cmd.operations.map(op => ({
-                id: op.id,
-                type: op.type,
-                duree: op.duree_total,
-                statut: op.statut,
-                progression: op.progression_reelle
-            }))
-        }));
-
-        return orders;
-    } catch (error) {
-        console.error('Erreur chargement:', error);
-        return [];
-    }
-}
-
-// Initialiser Realtime
-function initRealtime() {
-    subscribeToCommandes((payload) => {
-        // Rafraîchir l'UI quand une commande change
-        handleCommandeChange(payload);
-    });
-
-    subscribeToOperations((payload) => {
-        // Rafraîchir l'UI quand une opération change
-        handleOperationChange(payload);
-    });
-}
-```
-
-#### Étape 5 : Écriture dans Supabase (placements)
-
-```javascript
-// Sauvegarder un slot (placement d'opération)
-async function saveSlot(slot) {
-    const { data, error } = await supabase
-        .from('slots')
-        .upsert({
-            id: slot.id,
-            operation_id: slot.operationId,
-            machine_id: slot.machineId,
-            machine_name: slot.machineName,
-            duree: slot.duree,
-            semaine: slot.semaine,
-            jour: slot.jour,
-            heure_debut: slot.heureDebut,
-            heure_fin: slot.heureFin,
-            date_debut: slot.dateDebut,
-            date_fin: slot.dateFin,
-            overtime: slot.overtime || false
-        });
-
-    if (error) throw error;
-    return data;
-}
-
-// Supprimer un slot
-async function deleteSlot(slotId) {
-    const { error } = await supabase
-        .from('slots')
-        .delete()
-        .eq('id', slotId);
-
-    if (error) throw error;
-}
-
-// Mettre à jour le statut d'une opération
-async function updateOperationStatut(operationId, statut) {
-    const { error } = await supabase
-        .from('operations')
-        .update({ statut: statut })
-        .eq('id', operationId);
-
-    if (error) throw error;
-}
-```
-
----
-
-## Configuration Supabase requise
-
-### Activer Realtime sur les tables
-
-Dans Supabase Dashboard > Database > Replication :
-1. Activer la réplication pour `commandes`
-2. Activer la réplication pour `operations`
-3. Activer la réplication pour `slots`
-
-### Row Level Security (optionnel pour l'instant)
-
-Les tables sont actuellement sans RLS. Pour un usage multi-tenant futur, il faudra configurer les policies.
-
----
-
-## Structure des fichiers de l'app
-
-```
-ETM Prod/
-├── index.html          # UI principale
-├── styles.css          # Styles
-├── app.js              # Logique applicative (à modifier)
-├── supabase.js         # NOUVEAU : Module Supabase
-└── README.md           # Documentation
-```
-
----
-
-## Points d'attention
-
-1. **Contrainte séquentielle** : Cisaillage → Poinçonnage → Pliage (ordre strict)
-2. **Durées en heures décimales** : 0.02083333 = ~1.25 minutes
-3. **Filtre statuts actifs** : 'En cours', 'Planifiée', 'En prépa'
-4. **Multi-utilisateurs** : Patrick (planning hebdo), Pierre (planning journalier), Magali (saisie)
-5. **Pas de materiau** dans le Sheet source (colonne non présente)
-
----
-
-## Commandes utiles
-
-### Tester la connexion Supabase (dans la console navigateur)
-```javascript
-const { data, error } = await supabase.from('machines').select('*');
-console.log(data);
-```
-
-### Requête pour voir les commandes actives avec opérations
-```javascript
-const { data } = await supabase
-    .from('commandes')
-    .select('*, operations(*)')
-    .in('statut', ['En cours', 'Planifiée', 'En prépa'])
-    .limit(10);
-console.log(data);
-```
-
----
-
-## Résumé des actions réalisées
-
-1. ✅ Schéma Supabase créé (15 tables)
-2. ✅ Import initial CSV (commandes + opérations)
-3. ✅ Script Google Apps Script pour synchro incrémentale
-4. ✅ Trigger toutes les 5 min avec filtre 2 mois
-5. ✅ Batch upsert optimisé (2 requêtes max)
-6. ⏳ Intégration Realtime dans l'app (à faire)
-7. ⏳ Écriture des placements dans Supabase (à faire)
-
----
+1. **Chronological order** Cisaillage → Poinconnage → Pliage is immutable
+2. **ISO week-based planning** with year rollover handling
+3. **French language** throughout UI and data (day names, statuses)
+4. **Lunch break** 12:30-13:00 Mon-Thu enforced in gap-finding
+5. **Freeze protection** current/next day modifications require confirmation
+6. **Overbooking** allowed up to 105% with visual warning
+7. **No backend** beyond Supabase — all logic is client-side
+8. **~850 commandes** in production (38 active) — performance-sensitive
+9. **Multi-user** via Supabase Realtime (latency ~1.2-1.7s)
+10. **localStorage** serves as offline fallback (~5MB limit)
 
 # TOKEN OPTIMIZATION PROTOCOLS — INITIALIZED
 
@@ -983,3 +639,4 @@ TOKEN_EFFICIENCY_MODE="balanced" # Auto-switches to high/ultra as budget deplete
 | Core Development      | 50%    | 2500   |
 | Testing/Optimization  | 20%    | 1000   |
 | Documentation         | 10%    | 500    |
+

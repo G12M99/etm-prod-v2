@@ -1,20 +1,42 @@
-# ETM PROD - Planning de Production
+# ETM PROD V2 — Planning de Production
 
-> Outil de planification de production pour atelier de pliage industriel (Aluminium/Galvanisé)
+> Outil de planification de production pour atelier de tôlerie industriel (Aluminium/Galvanisé) avec synchronisation temps réel multi-utilisateurs via Supabase.
 
 ![Status](https://img.shields.io/badge/Status-Production-brightgreen)
-![Version](https://img.shields.io/badge/Version-3.21-blue)
+![Version](https://img.shields.io/badge/Version-3.22-blue)
 ![License](https://img.shields.io/badge/License-Proprietary-red)
 
 ## Présentation
 
-**ETM PROD** est une application de planification de production pour un atelier de pliage industriel. Elle offre une gestion complète des commandes avec vue semaine/journée/liste, drag & drop, calcul automatique par poids, gestion des urgences et synchronisation Google Sheets.
+**ETM PROD V2** est une application de planification de production pour un atelier de tôlerie (industrie fenêtres/portes). Elle gère le planning de 7 machines sur 3 opérations séquentielles obligatoires : **Cisaillage → Poinçonnage → Pliage**.
 
-### Parc machines
+### Utilisateurs
 
-- **2 Cisailles** : Cisaille A, Cisaille B
-- **2 Poinçonneuses** : Poinçonneuse M, Poinçonneuse T
-- **3 Plieuses** : Plieuse Lo, Plieuse Mik, Plieuse Mok
+| Utilisateur | Rôle | Usage |
+|-------------|------|-------|
+| Patrick | Planning hebdomadaire | Vue Semaine, affectation |
+| Pierre | Planning journalier | Vue Journée, drag & drop |
+| Magali | Saisie commandes | Google Sheets (source) |
+
+### Stack technique
+
+| Couche | Technologie |
+|--------|------------|
+| Frontend | HTML5 + CSS3 + JavaScript ES6+ (vanilla, aucun framework) |
+| Backend | Supabase (PostgreSQL + Realtime WebSockets) |
+| Source de données | Google Sheets → Apps Script → Supabase (sync auto 5 min) |
+| Cache local | localStorage (mode hors ligne) |
+| Hébergement | Netlify |
+
+---
+
+## Parc machines
+
+| Type | Machines | Opération |
+|------|----------|-----------|
+| **Cisailles** | Cisaille A, Cisaille B | Cisaillage |
+| **Poinçonneuses** | Poinçonneuse M, Poinçonneuse T | Poinçonnage |
+| **Plieuses** | Plieuse Lo, Plieuse Mik, Plieuse Mok | Pliage |
 
 ### Capacité de production
 
@@ -24,78 +46,53 @@
 | Vendredi | 07h00-12h00 | 5h |
 | **Total hebdomadaire** | | **39h** |
 
-### Heures supplémentaires disponibles
+### Heures supplémentaires
 
 | Jour | Créneau | Max |
 |------|---------|-----|
 | Lundi - Jeudi | 16h30-18h00 | 1.5h |
 | Vendredi | 12h00-14h00 | 2h |
-| **Limite** | Par machine | 10h/semaine |
+| **Limite hebdomadaire** | | **10h** |
+
+---
 
 ## Les 3 Vues
 
-### Vue Semaine
+### Vue 3 semaines
 
-Planning global sur 3 semaines glissantes :
-- **Jauge de capacité par cellule** (semaine × machine)
-- Couleurs : vert (0-75%), orange (76-95%), rouge (96%+)
+Planning global sur 3+ semaines glissantes :
+- Jauge de capacité par cellule (semaine x machine) avec code couleur
 - Badges de commandes cliquables
+- Affectation par drag & drop des commandes aux semaines
 - Affichage maintenance/fermetures
-- Clic sur une cellule → bascule en Vue Journée
+- Clic sur cellule → bascule en Vue Journée
 
-### Vue Journée
+### Vue semaine
 
 Planning détaillé heure par heure :
-- Timeline complète 07h-18h
-- Affichage pause déjeuner (zone grisée)
-- **Ligne rouge temps réel** (heure actuelle)
+- Timeline complète 07h-18h par machine
+- Pause déjeuner (zone grisée 12h30-13h00)
+- Ligne rouge temps réel (heure actuelle)
 - Séparateur heures supplémentaires
 - **Drag & Drop** des opérations entre machines/jours
 - Indicateurs de dépassement de capacité
-- Affichage événements système
+- Événements système (maintenance, fermetures)
+- Synchronisation temps réel entre utilisateurs
 
 ### Vue Liste
 
 Tableau récapitulatif des commandes :
-- **Tri dynamique** par colonnes (N°, Client, Date, Matériau, Statut, Progression)
-- Tri bidirectionnel (asc/desc)
-- **Recherche rapide** dans la liste
-- Colonne progression production (%)
+- Tri dynamique par colonnes (N°, Client, Date, Matériau, Statut, Progression)
+- Recherche rapide
 - Boutons détails et retrait de placement
 
-## Gestion des Commandes
+---
 
-### Création
-
-1. Cliquez sur **"+ Nouvelle commande"**
-2. Remplissez : N° Commande, Client, Date livraison, Ressource
-3. Sélectionnez le matériau et le poids (kg)
-4. Les durées sont **calculées automatiquement**
-5. La commande apparaît dans "Commandes à placer"
-
-### Calcul automatique des durées
-
-| Opération | Coefficient | Exemple (150kg) |
-|-----------|-------------|-----------------|
-| Cisaillage | 0.02h/kg | 3h |
-| Poinçonnage | 0.015h/kg | 2.25h |
-| Pliage | 0.025h/kg | 3.75h |
-
-### Statuts
-
-- **En cours** : Production en cours
-- **Planifiée** : Placée dans le planning
-- **Non placée** : En attente de planification
-- **En prépa** : En préparation
-- **Terminée** / **Livrée** : Masquées automatiquement
-
-## Sidebar - Commandes à Placer
-
-Liste des commandes non planifiées avec :
+## Sidebar — Commandes à Placer
 
 **Recherche en temps réel :**
 - Filtre par N° commande et nom client
-- Debounce 150ms pour performance
+- Debounce 150ms
 - Compteur de résultats
 - Touche Escape pour effacer
 
@@ -106,148 +103,229 @@ Liste des commandes non planifiées avec :
 
 **Actions :**
 - Placer automatiquement
+- Placement semi-automatique (choix machine/jour)
 - Voir détails
 - Drag & Drop vers le planning
 
+---
+
 ## Placement des Commandes
 
-### Placement automatique simple
+### Placement automatique
 
 Bouton "Placer automatiquement" :
 - Cherche les premiers créneaux disponibles
-- Respecte l'ordre : Cisaillage → Poinçonnage → Pliage
-- Remplit les machines par charge
+- Respecte l'ordre strict : Cisaillage → Poinçonnage → Pliage
+- Équilibrage de charge entre machines similaires
+- Gestion des scissions (opération sur plusieurs jours)
 
-### Insertion d'urgence (Scénarios)
+### Placement semi-automatique
 
-Modal workflow en 3 étapes pour les commandes urgentes :
+Modal en 2 étapes :
+1. Sélection machine + jour + créneau pour chaque opération
+2. Confirmation avec récapitulatif visuel
 
-**Scénario SMART :**
-- Déplace intelligemment les commandes moins urgentes
-- Calcul d'impact (opérations déplacées)
-- Mode NORMAL ou FORCE selon urgence
-- Minimise les perturbations
+### Insertion d'urgence
 
-**Scénario PRIO (Prioritaire) :**
-- Utilise les heures supplémentaires
-- Confirmation obligatoire (3 checkboxes) :
-  - Opérateurs disponibles
-  - Pas de maintenance prévue
-  - Autorisation manager
-- Créneaux overtime : 16h30-18h00 (lun-jeu), 12h00-14h00 (ven)
+Modal workflow pour les commandes urgentes :
 
-## Drag & Drop
+**Scénario SMART :** Déplace intelligemment les commandes moins urgentes avec calcul d'impact et minimisation des perturbations.
 
-En Vue Journée uniquement :
-1. **Cliquez et maintenez** sur une opération
-2. **Glissez** vers la cellule machine/jour souhaitée
-3. **Relâchez** : l'opération est déplacée
-4. Les dates sont recalculées automatiquement
-5. Contraintes vérifiées (ordre des opérations)
+**Scénario PRIO :** Utilise les heures supplémentaires avec confirmation obligatoire (opérateurs disponibles, pas de maintenance, autorisation manager).
 
-## Événements Système
+### Drag & Drop
 
-### Maintenance & Fermetures
+En Vue Journée :
+1. Cliquez et maintenez sur une opération
+2. Glissez vers la cellule machine/jour souhaitée
+3. Relâchez — l'opération est déplacée
+4. Dates recalculées automatiquement
+5. Contraintes chronologiques vérifiées
+6. **Synchronisation immédiate** vers les autres utilisateurs
 
-Modal dédié pour gérer :
+---
+
+## Synchronisation Temps Réel
+
+### Architecture
+
+```
+Google Sheets (Magali)
+       │
+       ▼  [Apps Script, toutes les 5 min]
+Supabase PostgreSQL
+       │                    ▲
+       ▼  [WebSocket]      │  [Upsert immédiat]
+ETM PROD (navigateur) ─────┘
+       │
+       ▼  [Backup]
+localStorage
+```
+
+### Multi-utilisateurs
+
+- Les modifications (drag & drop, placement, suppression) apparaissent sur tous les postes en **~1.2 secondes**
+- Indicateur visuel "Temps réel actif" (vert) / "Déconnecté" (orange)
+- 10 canaux WebSocket actifs (commandes, opérations, slots, machines, etc.)
+- Protection anti-écho : les changements locaux ne sont pas retraités
+
+### Mode hors ligne
+
+- Si Supabase est indisponible, l'app fonctionne en mode localStorage
+- Indicateur "Offline" dans le header
+- Sync automatique à la reconnexion
+
+---
+
+## Gestion des Configurations
+
+### Gestionnaire de Machines
+
+- Ajout / modification / suppression de machines
+- Changement de nom, couleur, capacité
+- Renommage automatique dans toutes les opérations existantes
+
+### Gestionnaire d'Horaires
+
+- Configuration des équipes (shifts) par jour
+- Gestion des pauses (déjeuner, autres)
+- Activation/désactivation des heures supplémentaires
+- Recalcul automatique des capacités
+
+### Événements Système
+
 - **Maintenance machine** : Bloque une machine spécifique
 - **Fermeture usine** : Bloque toutes les machines
+- Configuration dates/heures, multi-jours
+- Impact automatique sur les calculs de capacité
 
-Configuration :
-- Dates début/fin
-- Heures début/fin
-- Option "Dernier jour complet"
-- Raison (optionnel)
+---
 
-Affichage :
-- Badges spéciaux en Vue Semaine
-- Blocs colorés en Vue Journée
-- Liste des événements actifs avec edit/delete
+## Calcul automatique des durées
 
-## Synchronisation
+| Opération | Coefficient | Exemple (150kg) |
+|-----------|-------------|-----------------|
+| Cisaillage | 0.02h/kg | 3h |
+| Poinçonnage | 0.015h/kg | 2.25h |
+| Pliage | 0.025h/kg | 3.75h |
 
-### DataSyncManager
+Les durées proviennent principalement de Google Sheets (format HH:MM:SS). Le calcul par poids sert de fallback.
 
-Stratégie hybride :
-1. **Chargement local immédiat** (localStorage)
-2. **Sync Google Sheets** en arrière-plan
-3. **Auto-sync** toutes les 5 minutes
+### Override de durée
 
-**Indicateurs de statut :**
-- Synced : Données synchronisées
-- Offline : Mode local uniquement
-- Syncing : En cours de synchronisation
-- Error : Erreur de sync
+Les durées peuvent être modifiées manuellement par opération avec historique de l'override (qui, quand, valeur originale).
 
-**Bouton sync manuel** disponible en header.
+---
 
-### Stockage local
+## Statuts des Commandes
 
-- Données principales : `etm_commandes_v2`
-- Sauvegarde : `etm_commandes_backup`
-- Événements système : `etm_system_events`
+| Statut | Description | Visible |
+|--------|-------------|---------|
+| En prépa | En préparation, pas encore planifiée | Sidebar |
+| Non placée | En attente de placement | Sidebar |
+| En cours | Production en cours | Planning + Sidebar |
+| Planifiée | Toutes les opérations placées | Planning |
+| Terminée | Production terminée | Masquée |
+| Livrée | Commande livrée | Masquée |
+
+---
 
 ## Import / Export / Impression
 
 ### Export
-
-- Bouton "Exporter les données"
 - Format JSON complet
 - Téléchargement `etm_commandes_export.json`
 
 ### Import
-
-- Bouton "Importer les données"
 - Accepte fichiers JSON
 - Merge intelligent avec données existantes
 
 ### Impression
-
-- Modal de configuration
-- Sélection de la semaine
-- Format : Vue Semaine ou Vue Détaillée
+- Modal de configuration (semaine, format)
+- Vue Semaine ou Vue Détaillée
 - CSS optimisé pour impression
+
+---
+
+## Structure du Projet
+
+```
+ETM Prod/                           (18,073 lignes)
+├── index.html          (770 lignes)   # Interface principale + modals
+├── styles.css          (4,329 lignes) # Styles CSS (Grid, Flexbox, print)
+├── app.js              (12,406 lignes)# Toute la logique applicative
+├── supabase.js         (568 lignes)   # Module Supabase (CRUD + Realtime)
+├── CLAUDE.md                          # Référence technique pour Claude Code
+├── README.md                          # Ce fichier
+└── GEMINI.md                          # Guide Gemini
+```
+
+---
 
 ## Installation
 
 ### Prérequis
 
 - Navigateur web moderne (Chrome, Firefox, Safari, Edge)
-- Aucune dépendance externe
+- Connexion internet (pour Supabase Realtime)
+- Aucune dépendance à installer
 
 ### Démarrage
 
 ```bash
-cd "c:\Users\thexv\Desktop\ETM Prod"
-start index.html  # Windows
+# Windows
+start index.html
+
+# Ou ouvrir index.html dans un navigateur
 ```
 
-## Structure du projet
+### Configuration Supabase
 
-```
-ETM Prod/
-├── index.html          # Interface principale
-├── styles.css          # Styles (2785 lignes)
-├── app.js              # Logique applicative (7698 lignes)
-└── README.md           # Documentation
-```
+L'application se connecte automatiquement à Supabase avec les clés intégrées. Pour une nouvelle instance :
+
+1. Créer un projet Supabase
+2. Exécuter le schéma SQL (15 tables)
+3. Activer Realtime sur : commandes, operations, slots, machines, system_events, shifts, shift_schedules, breaks, overtime_config, overtime_slots
+4. Mettre à jour `SUPABASE_URL` et `SUPABASE_ANON_KEY` dans `app.js`
+
+---
 
 ## Technologies
 
 - **HTML5** : Structure + Drag & Drop API native
-- **CSS3** : Grid, Flexbox, Variables CSS, Animations
-- **JavaScript ES6+** : Classes, Async/Await, Modules
+- **CSS3** : Grid, Flexbox, Variables CSS, Animations, Print styles
+- **JavaScript ES6+** : Classes, Async/Await, Map/Set, Template literals
+- **Supabase JS v2** : Client PostgreSQL + Realtime subscriptions
 - **Google Fonts** : Police Inter
 - **Aucun framework** : Application vanilla
 
+---
+
 ## Raccourcis et astuces
 
-- **Escape** : Efface la recherche sidebar
-- **Clic hors modal** : Ferme le modal
-- **Clic sur cellule semaine** : Ouvre la vue journée
-- **Tri colonnes** : Clic sur en-tête (Vue Liste)
+| Raccourci | Action |
+|-----------|--------|
+| Escape | Efface la recherche sidebar |
+| Clic hors modal | Ferme le modal |
+| Clic cellule semaine | Ouvre la vue journée |
+| Clic en-tête colonne | Tri (Vue Liste) |
+| Drag badge commande | Affecte à une semaine |
+| Drag vers zone retrait | Désaffecte la commande |
+
+---
 
 ## Changelog
+
+### Version 4.18 (Janvier 2026)
+- Synchronisation Supabase Realtime bidirectionnelle
+- Nettoyage des slots orphelins (SELECT+compare+DELETE)
+- Sauvegarde immédiate pour drag & drop
+- Debounce optimisé (2s → 500ms)
+- IDs pour les slots fragmentés
+- Protection anti-écho Realtime (fenêtre 5s)
+- Dirty tracking (sync incrémentale)
+- Indicateur visuel Realtime (connecté/déconnecté/erreur)
+- Mode debug Realtime (REALTIME_DEBUG)
 
 ### Version 3.21 (Janvier 2026)
 - Jauge de capacité par cellule (Vue Semaine)
@@ -268,11 +346,12 @@ ETM Prod/
 - Scénarios SMART/PRIO pour urgences
 - Heures supplémentaires avec tracker
 - Événements système (maintenance/fermeture)
-- Synchronisation Google Sheets
+- Synchronisation Google Sheets → Supabase
 - Import/Export données
 - Impression planning
 - Toast notifications
-- Indicateur statut sync
+- Gestionnaire de machines et d'horaires
+- Placement semi-automatique (modal 2 étapes)
 
 ### Version 2.0.0 (Décembre 2025)
 - Vue Semaine / Vue Journée
@@ -288,10 +367,39 @@ ETM Prod/
 
 ---
 
-**Version** : 3.21
-**Statut** : Production
-**Date** : Janvier 2026
+## Base de données Supabase
+
+### Tables principales
+
+| Table | Description | Champs clés |
+|-------|-------------|-------------|
+| `commandes` | Commandes client | id, client_name, date_livraison, statut, poids |
+| `operations` | 3 par commande | id, commande_id, type, duree_total, statut |
+| `slots` | Créneaux planifiés | id, operation_id, machine_name, semaine, jour, heure_debut/fin |
+| `machines` | Configuration machines | id, name, type, capacity, color, active |
+| `system_events` | Maintenance/fermetures | id, type, machine, date_start/end |
+| `shifts` | Équipes de travail | id, name, active |
+| `shift_schedules` | Horaires par jour | shift_id, day_name, start_time, end_time |
+| `breaks` | Pauses | id, name, start_time, end_time, days |
+| `overtime_config` | Config heures sup | enabled, max_daily_hours, max_weekly_hours |
+| `overtime_slots` | Créneaux heures sup | days, start_time, end_time |
+
+### Synchronisation Google Sheets
+
+| Colonne Sheet | Table.Champ Supabase |
+|---------------|---------------------|
+| Fin de Prod | commandes.date_livraison |
+| Code cde | commandes.id |
+| STATUT | commandes.statut |
+| Client | commandes.client_name |
+| Poids | commandes.poids |
+| CISAILLE | operations.duree_total (Cisaillage) |
+| POINCON | operations.duree_total (Poinçonnage) |
+| PLIAGE | operations.duree_total (Pliage) |
+| Réf cde client | commandes.ref_cde_client |
 
 ---
 
-Développé pour ETM PROD
+**Version** : 3.22
+**Statut** : Production
+**Date** : Janvier 2026

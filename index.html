@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETM PROD</title>
+    <!-- ETM PROD V3 - Refactorisé -->
+    <link rel="icon" type="image/x-icon" href="etm_logo.ico">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="header-left">
+                <h1 class="app-title">ETM PROD</h1>
+                <p class="app-subtitle">Planning de Production - Atelier de Pliage</p>
+            </div>
+            <div class="header-right">
+            <div class="view-toggle">
+                <button id="btnVueListe" class="btn btn-toggle">Liste</button>
+                <button id="btnVueSemaine" class="btn btn-toggle active">3 Semaines</button>
+                <button id="btnVueJournee" class="btn btn-toggle">Semaine</button>
+            </div>
+
+            <!-- Contrôles de Synchronisation -->
+            <div class="sync-controls">
+                <!-- Indicateur de statut -->
+                <div id="connectionStatus" class="connection-status status-connecting" title="Initialisation...">
+                    <span class="status-dot">◌</span>
+                    <span class="status-label">Connexion...</span>
+                </div>
+
+                <!-- Bouton sync manuelle -->
+                <button class="btn btn-sm btn-secondary" id="btnSyncNow" title="Synchroniser maintenant">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M13.65 2.35A7.96 7.96 0 008 0v2a6 6 0 014.95 2.65l-1.6 1.6h4.5v-4.5l-1.2 1.2zM2.35 13.65A7.96 7.96 0 008 16v-2a6 6 0 01-4.95-2.65l1.6-1.6H.15v4.5l1.2-1.2z" fill="currentColor"/>
+                    </svg>
+                    Sync
+                </button>
+
+                <!-- Menu données -->
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-secondary" id="btnDataMenu" title="Options données">⋮</button>
+                    <div class="dropdown-menu">
+                        <button id="btnExportData">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M8 12V4M8 12L5 9M8 12l3-3M2 14h12" stroke="currentColor" stroke-width="2"/>
+                            </svg>
+                            Exporter les données
+                        </button>
+                                                    <button id="btnImportData">
+                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                            <path d="M8 4v8M8 4l3 3M8 4L5 7M2 2h12" stroke="currentColor" stroke-width="2"/>
+                                                        </svg>
+                                                        Importer les données
+                                                    </button>
+                                                    <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
+                                                    <button id="btnPrintPlanning">
+                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                            <path d="M4 4h8v2H4V4zm8 8H4v-2h8v2zM4 14h8v-2H4v2zm10-7h-1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5H14a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5zM2 5h12v7H2V5z" fill="currentColor"/>
+                                                        </svg>
+                                                        Imprimer Planning
+                                                    </button>
+                                                    <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
+                                                    <button id="btnCleanupOrders" title="Supprimer les commandes livrées/terminées de plus de 30 jours">
+                                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                            <path d="M5 2v1H3v1h10V3h-2V2H5zm1 1h4V2H6v1zM4 5v9a1 1 0 001 1h6a1 1 0 001-1V5H4zm2 7V7h1v5H6zm3 0V7h1v5H9z" fill="currentColor"/>
+                                                        </svg>
+                                                        Nettoyer commandes archivées
+                                                    </button>
+                                                    <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
+                                                    <div class="dropdown-submenu">
+                                                        <button class="dropdown-submenu-toggle">
+                                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                                <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 01-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 01.872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 012.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 012.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 01.872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 01-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 01-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 110-5.858 2.929 2.929 0 010 5.858z" fill="currentColor"/>
+                                                            </svg>
+                                                            Parametres
+                                                            <span class="submenu-arrow">&#9654;</span>
+                                                        </button>
+                                                        <div class="dropdown-submenu-content">
+                                                            <button id="btnManageMachines" title="Gerer les machines (ajout/modification/suppression)">
+                                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                                    <path d="M13.5 8.5a.5.5 0 01.5.5v4.5a1 1 0 01-1 1H3a1 1 0 01-1-1V9a.5.5 0 011 0v4.5h10V9a.5.5 0 01.5-.5zM8 1a3 3 0 013 3v1h1.5a.5.5 0 01.5.5v2a.5.5 0 01-1 0V6H4v1.5a.5.5 0 01-1 0v-2A.5.5 0 013.5 5H5V4a3 3 0 013-3zm2 4V4a2 2 0 10-4 0v1h4z" fill="currentColor"/>
+                                                                </svg>
+                                                                Machines
+                                                            </button>
+                                                            <button id="btnManageSchedule" title="Gerer les equipes et horaires de production">
+                                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                                    <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+                                                                    <path d="M8 4v4.5l3 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                                                </svg>
+                                                                Equipes & Horaires
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    <div style="border-top:1px solid var(--color-border); margin:4px 0;"></div>
+                                                    <div id="storageIndicator" style="padding: 6px 10px; font-size: 12px; color: var(--color-text-muted); display: flex; align-items: center; gap: 6px;">
+                                                        <span id="storageText">-- KB / 5 MB</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                <button class="btn btn-warning" id="btnSystemEvents" style="margin-left: 10px; background-color: #ffc107; border-color: #ffc107; color: #000; font-weight: 500;">
+                     Maintenance / Fermeture
+                </button>
+            </div>
+    </div>
+</header>
+
+<!-- Input file caché -->
+<input type="file" id="fileImport" accept=".json" style="display: none;">
+
+    <!-- Main Content -->
+    <main class="main-content-v2">
+        <!-- Sidebar: Commandes non placées -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <h2 class="sidebar-title">Commandes à placer</h2>
+            </div>
+
+            <!-- Zone de recherche -->
+            <div class="sidebar-search-container">
+                <div class="search-wrapper">
+                    <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none">
+                        <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
+                        <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    <input
+                        type="text"
+                        id="sidebarSearchInput"
+                        class="sidebar-search-input"
+                        placeholder="Rechercher par n° ou client..."
+                        autocomplete="off"
+                    />
+                    <button
+                        id="clearSidebarSearch"
+                        class="clear-search-btn"
+                        style="display: none;"
+                        aria-label="Effacer la recherche"
+                    >×</button>
+                </div>
+                <div id="searchResultCount" class="search-result-count" style="display: none;"></div>
+            </div>
+
+            <div id="unplacedOrdersContainer" class="drop-zone-sidebar">
+                <!-- Orders will be injected here -->
+            </div>
+        </aside>
+
+        <!-- Planning Area -->
+        <div class="planning-area">
+            <!-- Planning Container -->
+            <div class="planning-wrapper">
+                <div id="planningContainer">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Current Time Indicator -->
+    <div class="time-indicator" id="timeIndicator">
+        <div class="time-info">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="2"/>
+                <path d="M8 4v4l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span id="currentTime">--:--</span>
+        </div>
+    </div>
+
+    <!-- Modal: Order Details -->
+    <div class="modal" id="modalOrderDetails">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Détails de la commande</h2>
+                <button class="btn-close" id="btnCloseDetails">&times;</button>
+            </div>
+            <div class="modal-body" id="orderDetailsContent">
+                <!-- Will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: New Order -->
+    <div class="modal" id="modalNewOrder">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Nouvelle commande</h2>
+                <button class="btn-close" id="btnCloseNewOrder">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="formNewOrder">
+                    <div class="form-group">
+                        <label for="orderId">N° Commande</label>
+                        <input type="text" id="orderId" placeholder="CC25-XXXX" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="orderClient">Client</label>
+                        <input type="text" id="orderClient" placeholder="Nom du client" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="orderDelivery">Date de livraison</label>
+                            <input type="date" id="orderDelivery" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="orderResource">Ressource</label>
+                            <select id="orderResource" required>
+                                <option value="Polyvalent">Polyvalent</option>
+                                <option value="Apprenti">Apprenti</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <h3 class="section-title">Matériau</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="orderMaterial">Type</label>
+                            <select id="orderMaterial" required>
+                                <option value="Aluminium">Aluminium</option>
+                                <option value="Galvanisé">Galvanisé</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="orderWeight">Poids (kg)</label>
+                            <input type="number" id="orderWeight" min="1" step="1" placeholder="100" required>
+                        </div>
+                    </div>
+
+                    <div class="duration-info">
+                        <p><strong>Durées calculées automatiquement selon le poids :</strong></p>
+                        <ul>
+                            <li>Cisaillage : 0.02h/kg</li>
+                            <li>Poinçonnage : 0.015h/kg</li>
+                            <li>Pliage : 0.025h/kg</li>
+                        </ul>
+                        <p class="example">Exemple : 100kg = 2h cisaillage, 1.5h poinçonnage, 2.5h pliage</p>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" id="btnCancelNewOrder">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Créer la commande</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Insertion Urgente -->
+    <div class="modal" id="modalUrgentInsertion">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 class="modal-title">Insertion Commande Urgente</h2>
+                <button class="btn-close" id="btnCloseUrgent">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Étape 1: Sélection Commande -->
+                <div id="stepSelectOrder" class="insertion-step active">
+                    <h3>Sélectionnez la commande urgente</h3>
+                    <p style="color:var(--color-text-secondary); margin-bottom:16px;">Seules les commandes non placées ou partiellement placées sont affichées.</p>
+                    <div id="urgentOrdersList" style="max-height: 400px; overflow-y: auto;"></div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnCancelUrgent">Annuler</button>
+                        <button class="btn btn-primary" id="btnNextToScenarios" disabled>Suivant →</button>
+                    </div>
+                </div>
+
+                <!-- Étape 2: Choix du Scénario -->
+                <div id="stepSelectScenario" class="insertion-step">
+                    <h3>Choisissez un scénario d'insertion</h3>
+                    <div id="scenariosList"></div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnBackToOrders">← Précédent</button>
+                        <button class="btn btn-primary" id="btnValidateScenario" disabled>Valider ✓</button>
+                    </div>
+                </div>
+
+                <!-- Étape 3A: Confirmation Displacement (si Scénario SMART) -->
+                <div id="stepConfirmDisplacement" class="insertion-step">
+                    <h3>⚠️ CONFIRMATION INSERTION OPTIMISÉE</h3>
+
+                    <!-- Commande urgente -->
+                    <div style="margin-bottom:16px;">
+                        <h4 style="margin-bottom:8px; color:#0dcaf0;">Commande Urgente</h4>
+                        <div id="urgentOrderInfo"></div>
+                    </div>
+
+                    <!-- Impact sur le planning -->
+                    <div style="margin-bottom:16px;">
+                        <h4 style="margin-bottom:8px; color:#0dcaf0;">Impact sur le Planning</h4>
+                        <div id="impactSummary"></div>
+                    </div>
+
+                    <!-- Liste des opérations déplacées -->
+                    <div style="margin-bottom:16px;">
+                        <h4 style="margin-bottom:8px; color:#0dcaf0;">Opérations Déplacées</h4>
+                        <div id="displacementsList" style="max-height:300px; overflow-y:auto; padding:8px; background:#f8f9fa; border-radius:8px;"></div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnBackToScenariosFromSmart">← Retour</button>
+                        <button class="btn btn-primary" id="btnConfirmDisplacement">Confirmer ✓</button>
+                    </div>
+                </div>
+
+                <!-- Étape 3B: Confirmation Overbooking (si Scénario PRIO) -->
+                <div id="stepConfirmOvertime" class="insertion-step">
+                    <h3>⚠️ Confirmation Heures Supplémentaires</h3>
+                    <div id="overtimeDetails" style="background:#fff3cd; padding:16px; border-radius:8px; margin-bottom:16px; border-left:4px solid #ffc107;"></div>
+                    <div class="checklist">
+                        <label><input type="checkbox" id="checkOperators"> Les opérateurs sont disponibles</label>
+                        <label><input type="checkbox" id="checkMaintenance"> Pas de maintenance prévue</label>
+                        <label><input type="checkbox" id="checkApproval"> Autorisation manager obtenue</label>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnBackToScenarios">← Retour</button>
+                        <button class="btn btn-primary" id="btnConfirmOvertime" disabled>Confirmer et Valider</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Print Configuration -->
+    <div class="modal" id="modalPrintConfig">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Imprimer le Planning</h2>
+                <button class="btn-close" id="btnClosePrint">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Sélectionner la semaine</label>
+                    <select id="printWeekSelect">
+                        <!-- Populated by JS -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Format</label>
+                    <div style="display:flex; gap:10px;">
+                        <label style="font-weight:normal;"><input type="radio" name="printFormat" value="semaine" checked> 3 Semaines</label>
+                        <label style="font-weight:normal;"><input type="radio" name="printFormat" value="journee"> Semaine</label>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="btnCancelPrint">Annuler</button>
+                    <button class="btn btn-primary" id="btnConfirmPrint">🖨️ Imprimer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Overtime Confirmation -->
+    <div class="modal" id="modalOvertimeConfirm">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2 class="modal-title"> Confirmation Heures Supplémentaires</h2>
+            </div>
+            <div class="modal-body">
+                <div id="overtimeConfirmContent" style="line-height: 1.6;">
+                    <!-- Rempli dynamiquement par JS -->
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnRefuseOvertime">
+                     Refuser ❌
+                </button>
+                <button class="btn btn-primary" id="btnAcceptOvertime">
+                     Accepter heures sup ✅
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Planifier Semi-Auto (Vue Semaine) -->
+    <div class="modal" id="modalPlanifierSemiAuto">
+        <div class="modal-content modal-planifier-content">
+            <!-- Étape 1: Configuration -->
+            <div id="planifierStep1" class="planifier-step active">
+                <div class="modal-header">
+                    <h2 class="modal-title" id="planifierModalTitle">Planifier CC25-XXXX</h2>
+                    <button class="btn-close" id="btnClosePlanifier">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="planifierClientInfo" class="planifier-client-info"></div>
+
+                    <h3 class="planifier-section-title">Opérations à planifier</h3>
+                    <div id="planifierOperationsList" class="planifier-operations-list"></div>
+
+                    <div id="planifierParallelOption" class="planifier-parallel-option" style="display: none;">
+                        <label>
+                            <input type="checkbox" id="planifierParallelCheckbox">
+                            Placer Poinçonnage et Pliage en parallèle
+                        </label>
+                        <span class="planifier-parallel-hint">Les deux opérations démarreront au même moment</span>
+                    </div>
+
+                    <h3 class="planifier-section-title">Date et heure de début</h3>
+                    <div id="planifierDateTimeSection" class="planifier-datetime-section">
+                        <div class="planifier-day-select-wrapper">
+                            <label for="planifierDaySelect">Jour</label>
+                            <select id="planifierDaySelect" class="planifier-day-select"></select>
+                        </div>
+                        <div class="planifier-time-slider-wrapper">
+                            <label>Heure de début</label>
+                            <div class="time-slider-container">
+                                <input type="range" id="planifierTimeSlider" min="0" max="18" value="0" class="planifier-time-slider">
+                                <span id="planifierTimeDisplay" class="planifier-time-display">07:30</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnCancelPlanifier">Annuler</button>
+                        <button class="btn btn-primary" id="btnCalculerPlacement">Calculer le placement</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Étape 2: Récapitulatif -->
+            <div id="planifierStep2" class="planifier-step">
+                <div class="modal-header">
+                    <h2 class="modal-title">Récapitulatif du placement</h2>
+                    <button class="btn-close" id="btnClosePlanifierStep2">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="planifierWarningLivraison" class="planifier-warning-livraison"></div>
+                    <div id="planifierRecapList" class="planifier-recap-list"></div>
+
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" id="btnBackToStep1">Modifier</button>
+                        <button class="btn btn-primary" id="btnConfirmerPlacement">Confirmer</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: System Events (Maintenance/Closures) -->
+    <div class="modal" id="modalSystemEvents">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Gestion Fermetures & Maintenance</h2>
+                <button class="btn-close" id="btnCloseSystemEvents">&times;</button>
+            </div>
+            <div class="modal-body">
+
+                <!-- Formulaire -->
+                <div class="system-event-form" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 25px; border: 1px solid #dee2e6;">
+                    <h3 style="margin-top: 0; font-size: 1.1em; color: #495057; margin-bottom: 15px; border-bottom: 1px solid #ddd; padding-bottom: 10px;">Ajouter une période de blocage</h3>
+
+                    <div class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div class="form-group">
+                            <label>Type</label>
+                            <select id="sysEventType" class="form-control" onchange="window.toggleMachineSelect()">
+                                <option value="maintenance">Maintenance Machine</option>
+                                <option value="fermeture">Fermeture Totale (Usine)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="sysMachineGroup">
+                            <label>Machine</label>
+                            <select id="sysMachine" class="form-control">
+                                <!-- Populated by JS -->
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Date de Début</label>
+                            <input type="date" id="sysDateStart" class="form-control" onchange="updateFullLastDayVisibility()">
+                        </div>
+                        <div class="form-group">
+                            <label>Date de Fin (inclus)</label>
+                            <input type="date" id="sysDateEnd" class="form-control" onchange="updateFullLastDayVisibility()">
+                        </div>
+                        <div class="form-group">
+                            <label>Heure Début</label>
+                            <input type="time" id="sysStart" class="form-control" value="07:30">
+                        </div>
+                        <div class="form-group">
+                            <label>Heure Fin</label>
+                            <input type="time" id="sysEnd" class="form-control" value="16:30">
+                        </div>
+                        <div class="form-group" id="fullLastDayGroup" style="display: none; grid-column: span 2;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="sysFullLastDay">
+                                Dernier jour complet (jusqu'aux heures supp)
+                            </label>
+                        </div>
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label>Raison (Optionnel)</label>
+                            <input type="text" id="sysReason" class="form-control" placeholder="Maintenance préventive, Jour férié...">
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px; text-align: right;">
+                        <button class="btn btn-primary" id="btnAddSystemEvent">Ajouter le blocage</button>
+                    </div>
+                </div>
+
+                <!-- Liste -->
+                <h3 style="font-size: 1.1em; color: #495057; margin-bottom: 15px;">Blocages actifs</h3>
+                <div class="table-responsive">
+                    <table class="commands-table" style="width: 100%;">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Cible</th>
+                                <th>Période</th>
+                                <th>Raison</th>
+                                <th style="width: 160px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="systemEventsList">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Machine Manager -->
+    <div class="modal" id="modalMachines">
+        <div class="modal-content modal-machines-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Gestion des Machines</h2>
+                <button class="btn-close" id="btnCloseMachines">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="machinesManagerContent">
+                    <!-- Populated by JS -->
+                </div>
+                <div class="modal-actions" style="margin-top: 20px;">
+                    <button class="btn btn-secondary" id="btnResetMachines">Réinitialiser</button>
+                    <button class="btn btn-secondary" id="btnExportMachines">Exporter config</button>
+                    <button class="btn btn-secondary" id="btnCloseMachinesBottom">Fermer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Machine Edit/Add -->
+    <div class="modal" id="modalMachineEdit">
+        <div class="modal-content modal-machine-edit-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="machineEditTitle">Modifier la machine</h2>
+                <button class="btn-close" id="btnCloseMachineEdit">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="formMachineEdit">
+                    <input type="hidden" id="machineEditId">
+                    <input type="hidden" id="machineEditCategory">
+                    <input type="hidden" id="machineEditOriginalName">
+
+                    <div class="form-group">
+                        <label for="machineEditName">Nom de la machine</label>
+                        <input type="text" id="machineEditName" placeholder="Ex: Cisaille C" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="machineEditCapacity">Capacité (h/jour)</label>
+                        <input type="number" id="machineEditCapacity" step="0.5" min="0" max="24" value="8.5" required>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="machineEditColor">Couleur</label>
+                            <input type="color" id="machineEditColor" value="#4ade80">
+                        </div>
+                        <div class="form-group">
+                            <label for="machineEditActive">Statut</label>
+                            <select id="machineEditActive">
+                                <option value="true">Active</option>
+                                <option value="false">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-danger" id="btnDeleteMachine" style="margin-right: auto;">Supprimer</button>
+                        <button type="button" class="btn btn-secondary" id="btnCancelMachineEdit">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Enregistrer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Schedule Manager -->
+    <div class="modal" id="modalSchedule">
+        <div class="modal-content modal-schedule-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Gestion des Horaires</h2>
+                <button class="btn-close" id="btnCloseSchedule">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="scheduleManagerContent">
+                    <!-- Section Equipes -->
+                    <div class="schedule-section">
+                        <div class="schedule-section-header">
+                            <h3>Equipes de travail</h3>
+                            <button class="btn btn-sm btn-primary" id="btnAddShift">+ Ajouter equipe</button>
+                        </div>
+                        <div id="shiftsList" class="schedule-items-list">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Section Pauses -->
+                    <div class="schedule-section">
+                        <div class="schedule-section-header">
+                            <h3>Pauses</h3>
+                            <button class="btn btn-sm btn-primary" id="btnAddBreak">+ Ajouter pause</button>
+                        </div>
+                        <div id="breaksList" class="schedule-items-list">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Section Heures supplementaires -->
+                    <div class="schedule-section">
+                        <div class="schedule-section-header">
+                            <h3>Heures supplementaires</h3>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggleOvertime">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div id="overtimeConfig" class="overtime-config">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-actions" style="margin-top: 20px;">
+                    <button class="btn btn-secondary" id="btnResetSchedule">Reinitialiser</button>
+                    <button class="btn btn-secondary" id="btnExportSchedule">Exporter config</button>
+                    <button class="btn btn-secondary" id="btnCloseScheduleBottom">Fermer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Shift Edit/Add -->
+    <div class="modal" id="modalShiftEdit">
+        <div class="modal-content modal-shift-edit-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="shiftEditTitle">Modifier l'equipe</h2>
+                <button class="btn-close" id="btnCloseShiftEdit">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="formShiftEdit">
+                    <input type="hidden" id="shiftEditId">
+
+                    <div class="form-group">
+                        <label for="shiftEditName">Nom de l'equipe</label>
+                        <input type="text" id="shiftEditName" placeholder="Ex: Equipe Nuit" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Jours travailles</label>
+                        <div class="days-checkboxes" id="shiftDaysCheckboxes">
+                            <label><input type="checkbox" name="shiftDay" value="Lundi"> Lundi</label>
+                            <label><input type="checkbox" name="shiftDay" value="Mardi"> Mardi</label>
+                            <label><input type="checkbox" name="shiftDay" value="Mercredi"> Mercredi</label>
+                            <label><input type="checkbox" name="shiftDay" value="Jeudi"> Jeudi</label>
+                            <label><input type="checkbox" name="shiftDay" value="Vendredi"> Vendredi</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Horaires par jour</label>
+                        <div id="shiftSchedulesContainer" class="shift-schedules-container">
+                            <!-- Populated by JS based on selected days -->
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="shiftEditActive">Statut</label>
+                            <select id="shiftEditActive">
+                                <option value="true">Active</option>
+                                <option value="false">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-danger" id="btnDeleteShift" style="margin-right: auto;">Supprimer</button>
+                        <button type="button" class="btn btn-secondary" id="btnCancelShiftEdit">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Enregistrer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Break Edit/Add -->
+    <div class="modal" id="modalBreakEdit">
+        <div class="modal-content modal-break-edit-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="breakEditTitle">Modifier la pause</h2>
+                <button class="btn-close" id="btnCloseBreakEdit">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="formBreakEdit">
+                    <input type="hidden" id="breakEditId">
+
+                    <div class="form-group">
+                        <label for="breakEditName">Nom de la pause</label>
+                        <input type="text" id="breakEditName" placeholder="Ex: Pause cafe" required>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="breakEditStart">Heure debut</label>
+                            <input type="time" id="breakEditStart" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="breakEditEnd">Heure fin</label>
+                            <input type="time" id="breakEditEnd" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Jours concernes</label>
+                        <div class="days-checkboxes" id="breakDaysCheckboxes">
+                            <label><input type="checkbox" name="breakDay" value="Lundi"> Lundi</label>
+                            <label><input type="checkbox" name="breakDay" value="Mardi"> Mardi</label>
+                            <label><input type="checkbox" name="breakDay" value="Mercredi"> Mercredi</label>
+                            <label><input type="checkbox" name="breakDay" value="Jeudi"> Jeudi</label>
+                            <label><input type="checkbox" name="breakDay" value="Vendredi"> Vendredi</label>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="breakEditActive">Statut</label>
+                            <select id="breakEditActive">
+                                <option value="true">Active</option>
+                                <option value="false">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-danger" id="btnDeleteBreak" style="margin-right: auto;">Supprimer</button>
+                        <button type="button" class="btn btn-secondary" id="btnCancelBreakEdit">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Enregistrer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Conflit Multi-Utilisateurs -->
+    <div class="modal" id="modalConflict">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Conflit detecte</h2>
+                <button class="btn-close" onclick="closeConflictModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 16px;">
+                    Ce creneau a ete modifie par un autre utilisateur pendant que vous travailliez dessus.
+                </p>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+                    <div style="padding: 12px; background: #e3f2fd; border-radius: 8px;">
+                        <strong>Vos modifications</strong>
+                        <div id="conflictLocalData" style="margin-top: 8px; font-size: 0.9em;"></div>
+                    </div>
+                    <div style="padding: 12px; background: #fff3e0; border-radius: 8px;">
+                        <strong>Donnees distantes</strong>
+                        <div id="conflictRemoteData" style="margin-top: 8px; font-size: 0.9em;"></div>
+                    </div>
+                </div>
+
+                <p style="font-size: 0.9em; color: #666;">
+                    Que souhaitez-vous faire ?
+                </p>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 12px; justify-content: flex-end;">
+                <button class="btn btn-secondary" onclick="resolveConflict('cancel')">
+                    Annuler
+                </button>
+                <button class="btn btn-warning" onclick="resolveConflict('keep-remote')">
+                    Prendre les donnees distantes
+                </button>
+                <button class="btn btn-primary" onclick="resolveConflict('keep-mine')">
+                    Garder mes modifications
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <!-- Configuration & libs -->
+    <script src="config.js"></script>
+    <script src="supabase.js"></script>
+
+    <!-- Modules applicatifs (ES Modules) -->
+    <script type="module">
+      import './modules/init.js';
+    </script>
+</body>
+</html>

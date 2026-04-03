@@ -327,7 +327,7 @@ export function handleRealtimeMachineChange(payload) {
  * Handler pour les changements d'événements système en temps réel
  */
 export function handleRealtimeSystemEventChange(payload) {
-    if (isSaving()) return;
+    if (isSaving() || State.savingSystemEvents) return;
 
     if (_sysEventDebounceTimer) clearTimeout(_sysEventDebounceTimer);
     _sysEventDebounceTimer = setTimeout(() => {
@@ -343,7 +343,7 @@ export function handleRealtimeSystemEventChange(payload) {
  * Handler pour les changements de configuration horaires en temps réel
  */
 export function handleRealtimeScheduleChange(payload) {
-    if (isSaving()) return;
+    if (isSaving() || State.savingSchedule) return;
 
     if (_scheduleDebounceTimer) clearTimeout(_scheduleDebounceTimer);
     _scheduleDebounceTimer = setTimeout(() => {

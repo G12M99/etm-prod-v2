@@ -237,7 +237,7 @@ function addSystemEvent() {
 
     const fullLastDay = document.getElementById('sysFullLastDay').checked;
     const newEvent = {
-        id: editingEventId || ('SYS-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5)),
+        id: editingEventId || ('xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); })),
         version: 2,
         type,
         machine,
@@ -579,7 +579,7 @@ function resetSystemEventForm() {
 // ===================================
 
 export function initSystemEventsHandlers() {
-    document.getElementById('btnManageSystemEvents')?.addEventListener('click', openSystemEventsModal);
+    document.getElementById('btnSystemEvents')?.addEventListener('click', openSystemEventsModal);
 
     document.getElementById('btnCloseSystemEvents')?.addEventListener('click', () => {
         document.getElementById('modalSystemEvents').classList.remove('active');

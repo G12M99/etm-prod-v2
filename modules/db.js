@@ -6,6 +6,7 @@
  */
 
 import { State, reloadMachineArrays, markRecordAsModified, markCommandeDirty } from './state.js';
+import { computeHoursPerDay } from './utils.js';
 
 // ===================================
 // Configuration Supabase
@@ -57,11 +58,26 @@ export async function loadCommandes() {
 
     updateSyncIndicator('syncing', 'Chargement Supabase...');
 
+    // Fix 2 : filtre 90 jours glissants comme filet de sécurité
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 90);
+    const cutoffStr = cutoffDate.toISOString().split('T')[0];
+
+    // Fix 1 + 2 : OR entre statut actif (non terminé/livré) et date récente
+    // NULL statut inclus explicitement pour ne jamais manquer une nouvelle commande
+    // Fix 3 : limite explicite 2000
     const { data: commandesData, error: cmdError } = await State.supabaseClient
         .from('commandes')
-        .select('*');
+        .select('*')
+        .or(`statut.is.null,statut.not.in.(Livré,Terminé),date_livraison.gte.${cutoffStr}`)
+        .limit(2000);
 
     if (cmdError) throw cmdError;
+
+    // Fix 3 : warning si limite atteinte
+    if (commandesData && commandesData.length === 2000) {
+        console.warn('⚠️ Limite de chargement atteinte (2000) — certaines commandes peuvent être absentes');
+    }
     if (!commandesData || commandesData.length === 0) {
         State.commandes = [];
         updateSyncIndicator('synced', 'À jour (vide)');
@@ -126,6 +142,35 @@ export async function loadCommandes() {
 
     updateSyncIndicator('synced', 'Supabase');
     console.log(`${State.commandes.length} commandes chargées depuis Supabase`);
+}
+
+/**
+ * Fix 4 — Charge TOUTES les commandes (sans filtre statut/date) avec pagination.
+ * À utiliser pour les exports uniquement — NE PAS appeler au démarrage.
+ * @returns {Promise<Array>} Tableau brut des lignes Supabase (commandes uniquement, sans opérations ni slots)
+ */
+export async function fetchAllCommandes() {
+    if (!State.supabaseClient) throw new Error('Supabase non initialisé');
+
+    const PAGE_SIZE = 1000;
+    let allData = [];
+    let from = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+        const { data, error } = await State.supabaseClient
+            .from('commandes')
+            .select('*')
+            .range(from, from + PAGE_SIZE - 1);
+
+        if (error) throw error;
+        allData = [...allData, ...data];
+        hasMore = data.length === PAGE_SIZE;
+        from += PAGE_SIZE;
+    }
+
+    console.log(`[fetchAllCommandes] ${allData.length} commandes récupérées (export complet)`);
+    return allData;
 }
 
 // ===================================
@@ -241,6 +286,7 @@ export async function loadSchedule() {
             }));
 
             const overtime = {
+                id: overtimeData?.id || null,
                 enabled: overtimeData?.enabled || false,
                 maxDailyHours: overtimeData?.max_daily_hours || 2,
                 maxWeeklyHours: overtimeData?.max_weekly_hours || 10,
@@ -265,38 +311,22 @@ export async function loadSchedule() {
 
 /**
  * Recalcule State.HOURS_PER_DAY et State.TOTAL_HOURS_PER_WEEK
- * depuis State.scheduleConfig.
+ * depuis State.scheduleConfig, filtré sur State.currentShiftId si initialisé.
  */
 function _recalculateHoursPerDay() {
-    const result = {};
-
-    State.DAYS_OF_WEEK.forEach(day => {
-        let totalHours = 0;
-
-        // Heures de travail depuis les shifts actifs
-        (State.scheduleConfig.shifts || [])
-            .filter(s => s.active && s.schedules && s.schedules[day])
-            .forEach(shift => {
-                const schedule = shift.schedules[day];
-                const start = _timeStringToDecimal(schedule.start);
-                const end = _timeStringToDecimal(schedule.end);
-                totalHours += (end - start);
-            });
-
-        // Soustraire les pauses actives
-        (State.scheduleConfig.breaks || [])
-            .filter(b => b.active && b.days && b.days.includes(day))
-            .forEach(brk => {
-                const start = _timeStringToDecimal(brk.start);
-                const end = _timeStringToDecimal(brk.end);
-                totalHours -= (end - start);
-            });
-
-        result[day] = Math.max(0, Math.round(totalHours * 100) / 100);
-    });
+    const filteredConfig = State.currentShiftId
+        ? { ...State.scheduleConfig, shifts: (State.scheduleConfig.shifts || []).filter(s => s.id === State.currentShiftId) }
+        : State.scheduleConfig;
+    const { dailyHours: result, totalWeekly } = computeHoursPerDay(filteredConfig);
 
     State.HOURS_PER_DAY = result;
-    State.TOTAL_HOURS_PER_WEEK = Object.values(result).reduce((a, b) => a + b, 0);
+    State.TOTAL_HOURS_PER_WEEK = totalWeekly;
+
+    // Synchroniser CAPACITY_CONFIG avec les valeurs recalculées
+    if (State.CAPACITY_CONFIG?.normal) {
+        State.CAPACITY_CONFIG.normal.dailyHours = { ...result };
+        State.CAPACITY_CONFIG.normal.weeklyHours = State.TOTAL_HOURS_PER_WEEK;
+    }
 
     // Recalculer LUNCH_BREAK depuis les breaks
     const lunchBreak = (State.scheduleConfig.breaks || []).find(b => b.active);
@@ -341,6 +371,8 @@ export async function loadSystemEvents() {
                 id: e.id,
                 type: e.type,
                 name: e.name,
+                reason: e.description || e.name,
+                machine: (e.affected_machines && e.affected_machines.length > 0) ? e.affected_machines[0] : 'ALL',
                 dateStart: e.date_start,
                 dateEnd: e.date_end,
                 startTimeFirstDay: e.start_time_first_day,
@@ -612,6 +644,86 @@ export async function deleteAllSlotsForOperation(operationId) {
     }
 }
 
+/**
+ * Supprime tous les slots Supabase associés à un nom de machine.
+ * @param {string} machineName
+ * @returns {Promise<boolean>} true si succès
+ */
+export async function deleteSlotsByMachineName(machineName) {
+    if (!State.supabaseClient || !machineName) return true;
+
+    try {
+        const { error } = await State.supabaseClient
+            .from('slots')
+            .delete()
+            .eq('machine_name', machineName);
+
+        if (error) throw error;
+        console.log(`Slots de la machine "${machineName}" supprimés de Supabase`);
+        return true;
+    } catch (e) {
+        console.error('Erreur suppression slots machine Supabase:', e);
+        return false;
+    }
+}
+
+/**
+ * Supprime une pause de Supabase.
+ * @param {string} breakId
+ * @returns {boolean}
+ */
+export async function deleteBreakFromSupabase(breakId) {
+    if (!State.supabaseClient || !breakId) return true;
+
+    try {
+        const { error } = await State.supabaseClient
+            .from('breaks')
+            .delete()
+            .eq('id', breakId);
+
+        if (error) throw error;
+
+        console.log(`Pause "${breakId}" supprimée de Supabase`);
+        return true;
+    } catch (e) {
+        console.error('Erreur suppression pause Supabase:', e);
+        return false;
+    }
+}
+
+/**
+ * Supprime un shift et ses shift_schedules de Supabase.
+ * @param {string} shiftId
+ * @returns {boolean}
+ */
+export async function deleteShiftFromSupabase(shiftId) {
+    if (!State.supabaseClient || !shiftId) return true;
+
+    try {
+        // Supprimer les schedules du shift
+        const { error: schedError } = await State.supabaseClient
+            .from('shift_schedules')
+            .delete()
+            .eq('shift_id', shiftId);
+
+        if (schedError) throw schedError;
+
+        // Supprimer le shift lui-même
+        const { error: shiftError } = await State.supabaseClient
+            .from('shifts')
+            .delete()
+            .eq('id', shiftId);
+
+        if (shiftError) throw shiftError;
+
+        console.log(`Shift "${shiftId}" supprimé de Supabase`);
+        return true;
+    } catch (e) {
+        console.error('Erreur suppression shift Supabase:', e);
+        return false;
+    }
+}
+
 // ===================================
 // Écriture — Configuration Machines
 // ===================================
@@ -661,6 +773,7 @@ export async function saveMachines(machinesConfig) {
 export async function saveSchedule(scheduleConfig) {
     if (!State.supabaseClient) return;
 
+    State.savingSchedule = true;
     try {
         // Sauvegarder shifts
         for (const shift of scheduleConfig.shifts) {
@@ -712,32 +825,37 @@ export async function saveSchedule(scheduleConfig) {
 
         // Sauvegarder overtime config
         if (scheduleConfig.overtime) {
+            // Option B : id UUID stable — généré une seule fois, réutilisé ensuite
+            let overtimeId = scheduleConfig.overtime.id;
+            if (!overtimeId) {
+                overtimeId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                    const r = Math.random() * 16 | 0;
+                    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+                });
+                // Stocker dans State pour les saves suivants
+                State.scheduleConfig.overtime.id = overtimeId;
+            }
+
             await State.supabaseClient
                 .from('overtime_config')
-                .delete()
-                .neq('id', '00000000-0000-0000-0000-000000000000');
-
-            const { data: otConfig } = await State.supabaseClient
-                .from('overtime_config')
-                .insert({
+                .upsert({
+                    id: overtimeId,
                     enabled: scheduleConfig.overtime.enabled,
                     max_daily_hours: scheduleConfig.overtime.maxDailyHours,
                     max_weekly_hours: scheduleConfig.overtime.maxWeeklyHours
-                })
-                .select()
-                .single();
+                }, { onConflict: 'id' });
 
-            if (otConfig && scheduleConfig.overtime.slots) {
+            if (scheduleConfig.overtime.slots) {
                 await State.supabaseClient
                     .from('overtime_slots')
                     .delete()
-                    .eq('overtime_config_id', otConfig.id);
+                    .eq('overtime_config_id', overtimeId);
 
                 for (const slot of scheduleConfig.overtime.slots) {
                     await State.supabaseClient
                         .from('overtime_slots')
                         .insert({
-                            overtime_config_id: otConfig.id,
+                            overtime_config_id: overtimeId,
                             days: slot.days,
                             start_time: slot.start,
                             end_time: slot.end,
@@ -750,6 +868,10 @@ export async function saveSchedule(scheduleConfig) {
         console.log('Configuration horaires sauvegardée Supabase');
     } catch (e) {
         console.error('Erreur sauvegarde horaires Supabase:', e);
+    } finally {
+        // Garder le flag actif le temps que les Realtime des 5 tables arrivent
+        // (shifts, shift_schedules, breaks, overtime_config, overtime_slots + debounce 2s)
+        setTimeout(() => { State.savingSchedule = false; }, 7000);
     }
 }
 
@@ -764,9 +886,13 @@ export async function saveSchedule(scheduleConfig) {
 export async function saveSystemEvents(events) {
     if (!State.supabaseClient) return;
 
+    State.savingSystemEvents = true;
     try {
-        for (const event of events) {
-            const eventData = {
+        // Delete all existing records then re-insert (avoids onConflict constraint requirement)
+        await State.supabaseClient.from('system_events').delete().not('id', 'is', null);
+
+        if (events.length > 0) {
+            const eventsData = events.map(event => ({
                 id: event.id,
                 type: event.type,
                 name: event.name || event.reason || 'Événement',
@@ -775,22 +901,23 @@ export async function saveSystemEvents(events) {
                 start_time_first_day: event.startTimeFirstDay,
                 end_time_last_day: event.endTimeLastDay,
                 full_last_day: event.fullLastDay !== false,
-                affected_machines: event.affectedMachines || [],
+                affected_machines: event.machine ? [event.machine] : (event.affectedMachines || []),
                 affected_shifts: event.affectedShifts || [],
                 description: event.description || event.reason,
                 resolved_conflicts: event.resolvedConflicts || {},
-                version: event.version || 2,
-                updated_at: new Date().toISOString()
-            };
+                version: event.version || 2
+            }));
 
-            await State.supabaseClient
-                .from('system_events')
-                .upsert(eventData, { onConflict: 'id' });
+            const { error: insertError } = await State.supabaseClient.from('system_events').insert(eventsData);
+            if (insertError) throw insertError;
         }
 
         console.log('System events sauvegardés vers Supabase');
     } catch (e) {
         console.error('Erreur sauvegarde system events Supabase:', e);
+    } finally {
+        // Keep flag active long enough to absorb the Realtime DELETE+INSERT events
+        setTimeout(() => { State.savingSystemEvents = false; }, 6000);
     }
 }
 

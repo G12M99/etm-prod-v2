@@ -58,6 +58,9 @@ export const State = {
     draggedOperation: null,
     currentSearchQuery: '',
     isPrintMode: false,
+    savingSystemEvents: false,
+    savingSchedule: false,
+    currentShiftId: null,
     hideCompletedStatuses: true,
 
     // ===== Supabase / Realtime =====

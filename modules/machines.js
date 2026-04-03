@@ -7,7 +7,7 @@
 
 import { State, reloadMachineArrays, markAllCommandesDirty } from './state.js';
 import { Toast } from './utils.js';
-import { saveMachines } from './db.js';
+import { saveMachines, deleteSlotsByMachineName } from './db.js';
 import { saveData } from './db.js';
 import { refresh } from './ui-list.js';
 
@@ -184,6 +184,18 @@ function saveMachineEdit() {
         return;
     }
 
+    // Fix 1: bloquer si le nom est déjà pris par une autre machine (toutes catégories)
+    const allMachines = [
+        ...(State.machinesConfig.cisaillage || []),
+        ...(State.machinesConfig.poinconnage || []),
+        ...(State.machinesConfig.pliage || [])
+    ];
+    const nameTaken = allMachines.some(m => m.id !== machineId && m.name.trim().toLowerCase() === name.toLowerCase());
+    if (nameTaken) {
+        Toast.error(`Ce nom de machine existe déjà : "${name}"`);
+        return;
+    }
+
     if (machineId) {
         const index = machines.findIndex(m => m.id === machineId);
         if (index !== -1) {
@@ -227,7 +239,7 @@ function saveMachineEdit() {
     refresh();
 }
 
-function deleteMachine() {
+async function deleteMachine() {
     const machineId = document.getElementById('machineEditId').value;
     const category = document.getElementById('machineEditCategory').value;
     const machineName = document.getElementById('machineEditName').value;
@@ -240,9 +252,10 @@ function deleteMachine() {
         )
     );
 
-    let confirmMessage = `Êtes-vous sûr de vouloir supprimer la machine "${machineName}" ?`;
+    // Fix 2: message de confirmation incluant la suppression des créneaux
+    let confirmMessage = `Supprimer la machine "${machineName}" ?`;
     if (hasPlannedOps) {
-        confirmMessage += '\n\n⚠️ ATTENTION: Des opérations sont planifiées sur cette machine. Elles seront désaffectées.';
+        confirmMessage = `Supprimer la machine "${machineName}" supprimera aussi tous ses créneaux planifiés.\n\nConfirmer ?`;
     }
 
     if (!confirm(confirmMessage)) return;
@@ -251,13 +264,23 @@ function deleteMachine() {
     const index = machines.findIndex(m => m.id === machineId);
 
     if (index !== -1) {
-        deleteMachineFromSupabase(machineId);
+        // Fix 2: supprimer les slots Supabase d'abord — bloquer si échec
+        if (hasPlannedOps) {
+            const slotsDeleted = await deleteSlotsByMachineName(machineName);
+            if (!slotsDeleted) {
+                Toast.error('Erreur lors de la suppression des créneaux. Machine non supprimée.');
+                return;
+            }
+        }
 
-        machines.splice(index, 1);
-
+        // Nettoyer State en mémoire
         if (hasPlannedOps) {
             unassignOperationsFromMachine(machineName);
         }
+
+        // Supprimer la machine en Supabase puis dans State
+        await deleteMachineFromSupabase(machineId);
+        machines.splice(index, 1);
 
         saveMachinesConfig();
         reloadMachineArrays();

@@ -361,7 +361,7 @@ export function calculerCapaciteSemaineGlobale(semaine, annee) {
 export function getAvailableRangesForDay(day) {
     const ranges = [];
     (State.scheduleConfig.shifts || [])
-        .filter(s => s.active && s.schedules && s.schedules[day])
+        .filter(s => s.active && s.schedules && s.schedules[day] && (!State.currentShiftId || s.id === State.currentShiftId))
         .forEach(shift => {
             const schedule = shift.schedules[day];
             ranges.push({

@@ -7,7 +7,7 @@
 
 import { State } from './state.js';
 import {
-    timeToDecimalHours, decimalToTimeString, generateSlotId,
+    timeToDecimalHours, timeStringToDecimal, decimalToTimeString, generateSlotId,
     getDateFromWeekDay, getWeekNumber, getISOWeekYear, formatHours,
     DAYS_OF_WEEK, Toast
 } from './utils.js';
@@ -294,11 +294,18 @@ export function findConflicts(machine, dayName, weekNum, yearNum, startHour, end
  * Trouve un créneau urgent sur la journée étendue (Matin -> Fin Heures Sup)
  */
 export function findUrgentSlot(machine, day, duration, minStartHour = 0, targetWeek = State.semaineSelectionnee, targetYear = State.anneeSelectionnee) {
-    // 1. Définir les bornes de la journée étendue
-    const dayStart = day === 'Vendredi' ? 7.0 : 7.5;
+    // 1. Définir les bornes depuis le shift actif (fallback hardcodé si aucun)
+    const activeShift = (State.scheduleConfig.shifts || []).find(s => s.id === State.currentShiftId);
+    const shiftSchedule = activeShift?.schedules?.[day];
+    const overtimeSlot = State.scheduleConfig.overtime?.enabled
+        ? (State.scheduleConfig.overtime.slots || []).find(s => s.days?.includes(day))
+        : null;
+
+    const dayStart = shiftSchedule ? timeStringToDecimal(shiftSchedule.start) : (day === 'Vendredi' ? 7.0 : 7.5);
+    const shiftEnd = shiftSchedule ? timeStringToDecimal(shiftSchedule.end) : (day === 'Vendredi' ? 12.0 : 16.5);
 
     // Fin absolue (Standard + Max Heures Sup)
-    const dayEnd = day === 'Vendredi' ? 14.0 : 18.0;
+    const dayEnd = overtimeSlot ? timeStringToDecimal(overtimeSlot.end) : shiftEnd;
 
     // Le début effectif ne peut pas être avant l'ouverture
     let searchStart = Math.max(dayStart, minStartHour);
@@ -365,8 +372,10 @@ export function findUrgentSlot(machine, day, duration, minStartHour = 0, targetW
  * Find standard gap (no overtime)
  */
 export function findStandardGap(machine, day, week, year, duration, minStart) {
-    const dayStart = 7.5;
-    const dayEnd = day === 'Vendredi' ? 12.0 : 16.5;
+    const activeShift = (State.scheduleConfig.shifts || []).find(s => s.id === State.currentShiftId);
+    const shiftSchedule = activeShift?.schedules?.[day];
+    const dayStart = shiftSchedule ? timeStringToDecimal(shiftSchedule.start) : 7.5;
+    const dayEnd = shiftSchedule ? timeStringToDecimal(shiftSchedule.end) : (day === 'Vendredi' ? 12.0 : 16.5);
     if (minStart >= dayEnd) return null;
 
     const startSearch = Math.max(dayStart, minStart);
@@ -384,8 +393,10 @@ export function findStandardGap(machine, day, week, year, duration, minStart) {
  */
 export function findAllGaps(machine, day, week, year, minStart) {
     const gaps = [];
-    const dayEnd = day === 'Vendredi' ? 12.0 : 16.5;
-    let current = Math.max(7.5, minStart);
+    const activeShift = (State.scheduleConfig.shifts || []).find(s => s.id === State.currentShiftId);
+    const shiftSchedule = activeShift?.schedules?.[day];
+    const dayEnd = shiftSchedule ? timeStringToDecimal(shiftSchedule.end) : (day === 'Vendredi' ? 12.0 : 16.5);
+    let current = Math.max(shiftSchedule ? timeStringToDecimal(shiftSchedule.start) : 7.5, minStart);
 
     while (current < dayEnd) {
         const slot = findUrgentSlot(machine, day, 0.5, current, week, year);

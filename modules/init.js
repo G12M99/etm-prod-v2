@@ -42,14 +42,31 @@ function initEventHandlers() {
         });
     });
 
-    // Close modal Order Details
-    document.getElementById('closeModalOrderDetails')?.addEventListener('click', () => {
+    // Close buttons for modals: Details, NewOrder, PrintConfig
+    document.getElementById('btnCloseDetails')?.addEventListener('click', () => {
         document.getElementById('modalOrderDetails')?.classList.remove('active');
     });
+    document.getElementById('btnCloseNewOrder')?.addEventListener('click', () => {
+        document.getElementById('modalNewOrder')?.classList.remove('active');
+    });
+    document.getElementById('btnClosePrint')?.addEventListener('click', () => {
+        document.getElementById('modalPrintConfig')?.classList.remove('active');
+    });
 
-    // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Y redo
+    // Overlay click to close modals: Details, NewOrder, PrintConfig
+    ['modalOrderDetails', 'modalNewOrder', 'modalPrintConfig'].forEach(id => {
+        document.getElementById(id)?.addEventListener('click', (e) => {
+            if (e.target.id === id) {
+                document.getElementById(id).classList.remove('active');
+            }
+        });
+    });
+
+    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 'z') {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal.active').forEach(m => m.classList.remove('active'));
+        } else if (e.ctrlKey && e.key === 'z') {
             e.preventDefault();
             historyManager.undo();
         } else if (e.ctrlKey && e.key === 'y') {

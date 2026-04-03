@@ -258,6 +258,67 @@ export function getUrgencyLevel(dateLivraison, now = new Date()) {
 }
 
 // ===================================
+// Calcul heures par jour (source de vérité unique)
+// ===================================
+
+/**
+ * Calcule les heures travaillées par jour depuis une config horaire.
+ * Fonction pure — ne lit pas State directement.
+ * @param {object} scheduleConfig - { shifts, breaks, overtime }
+ * @returns {{ dailyHours: Object.<string,number>, totalWeekly: number }}
+ */
+export function computeHoursPerDay(scheduleConfig) {
+    const result = {};
+
+    if (!scheduleConfig) {
+        DAYS_OF_WEEK.forEach(day => { result[day] = 0; });
+        return { dailyHours: result, totalWeekly: 0 };
+    }
+
+    const shifts = scheduleConfig.shifts || [];
+    const breaks = scheduleConfig.breaks || [];
+
+    DAYS_OF_WEEK.forEach(day => {
+        // Plages des shifts actifs pour ce jour
+        const ranges = shifts
+            .filter(s => s.active && s.schedules && s.schedules[day])
+            .map(s => ({
+                start: timeStringToDecimal(s.schedules[day].start),
+                end: timeStringToDecimal(s.schedules[day].end)
+            }));
+
+        // Pauses actives applicables ce jour
+        const activeBreaks = breaks.filter(b => b.active && b.days && b.days.includes(day));
+
+        let totalHours = 0;
+
+        ranges.forEach(range => {
+            let hours = range.end - range.start;
+
+            // Soustraire uniquement la partie de la pause qui chevauche ce créneau
+            activeBreaks.forEach(b => {
+                const breakStart = timeStringToDecimal(b.start);
+                const breakEnd = timeStringToDecimal(b.end);
+
+                if (breakStart < range.end && breakEnd > range.start) {
+                    const overlapStart = Math.max(breakStart, range.start);
+                    const overlapEnd = Math.min(breakEnd, range.end);
+                    hours -= (overlapEnd - overlapStart);
+                }
+            });
+
+            totalHours += Math.max(0, hours);
+        });
+
+        const rounded = Math.round(totalHours * 100) / 100;
+        if (rounded > 0) result[day] = rounded;
+    });
+
+    const totalWeekly = Math.round(Object.values(result).reduce((a, b) => a + b, 0) * 100) / 100;
+    return { dailyHours: result, totalWeekly };
+}
+
+// ===================================
 // Toast Notification System
 // ===================================
 

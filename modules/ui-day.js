@@ -57,11 +57,32 @@ export function renderVueJournee() {
         </div>
     `;
 
+    // Determine which days to display (filtered by active shift + days with existing ops)
+    const activeShift = State.currentShiftId
+        ? (State.scheduleConfig.shifts || []).find(s => s.id === State.currentShiftId)
+        : null;
+
+    let daysToDisplay;
+    if (!activeShift) {
+        daysToDisplay = [...DAYS_OF_WEEK];
+    } else {
+        const shiftDaySet = new Set(activeShift.days || DAYS_OF_WEEK);
+        // Keep days with already-placed operations (constraint: don't hide existing data)
+        getPlacedOrders().forEach(cmd => {
+            cmd.operations?.forEach(op => {
+                op.slots?.forEach(slot => {
+                    if (slot.semaine === State.semaineSelectionnee) shiftDaySet.add(slot.jour);
+                });
+            });
+        });
+        daysToDisplay = DAYS_OF_WEEK.filter(d => shiftDaySet.has(d));
+    }
+
     // Day headers generator
     const generateDayHeaders = () => {
         let headersHtml = '<div class="day-headers">';
         headersHtml += '<div class="day-header-cell machine-col">Machine</div>';
-        DAYS_OF_WEEK.forEach(day => {
+        daysToDisplay.forEach(day => {
             const dateObj = getDateFromWeekDay(State.semaineSelectionnee, day, '00:00', State.anneeSelectionnee);
             const dayNum = dateObj.getDate().toString().padStart(2, '0');
             const monthNum = (dateObj.getMonth() + 1).toString().padStart(2, '0');
@@ -97,7 +118,7 @@ export function renderVueJournee() {
             html += `<div class="machine-cell"><div class="machine-name">${escapeHtml(machine)}${machineSuffix}</div></div>`;
 
             // Day cells with hourly time slots
-            DAYS_OF_WEEK.forEach(day => {
+            daysToDisplay.forEach(day => {
                 const capacityInfo = calculerCapaciteJour(machine, day, State.semaineSelectionnee, State.anneeSelectionnee);
                 const capacityClass = capacityInfo.capacityClass;
                 const isOverCapacity = capacityInfo.isOvertime;
@@ -107,10 +128,15 @@ export function renderVueJournee() {
                 const monthNum = (dateObj.getMonth() + 1).toString().padStart(2, '0');
                 const formattedDate = `${dayNum}/${monthNum}`;
 
-                // Timeline hours: dynamic based on multi-shift schedule
+                // Timeline hours: shift-specific schedule when available, else global range
                 const globalSchedule = getGlobalScheduleRangeForDay(day);
-                const startHourTimeline = globalSchedule.globalStart;
-                const endHourTimeline = globalSchedule.globalEnd;
+                const shiftDaySchedule = activeShift?.schedules?.[day];
+                const startHourTimeline = shiftDaySchedule
+                    ? timeStringToDecimal(shiftDaySchedule.start)
+                    : globalSchedule.globalStart;
+                const endHourTimeline = shiftDaySchedule
+                    ? timeStringToDecimal(shiftDaySchedule.end)
+                    : globalSchedule.globalEnd;
                 const daySchedule = getScheduleForDay(day);
 
                 html += `

@@ -63,10 +63,10 @@ export function renderVueListe() {
     if (listSearch) {
         const term = listSearch.toLowerCase();
         filteredCommandes = filteredCommandes.filter(c =>
-            c.id.toLowerCase().includes(term) ||
-            c.client.toLowerCase().includes(term) ||
-            c.statut.toLowerCase().includes(term) ||
-            c.materiau.toLowerCase().includes(term)
+            (c.id || '').toLowerCase().includes(term) ||
+            (c.client || '').toLowerCase().includes(term) ||
+            (c.statut || '').toLowerCase().includes(term) ||
+            (c.materiau || '').toLowerCase().includes(term)
         );
     }
 

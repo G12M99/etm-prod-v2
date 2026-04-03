@@ -6,10 +6,11 @@
  */
 
 import { State, markAllCommandesDirty } from './state.js';
-import { timeToDecimalHours, timeStringToDecimal, DAYS_OF_WEEK, Toast } from './utils.js';
+import { timeToDecimalHours, timeStringToDecimal, DAYS_OF_WEEK, Toast, computeHoursPerDay, escapeHtml } from './utils.js';
 import { getAvailableRangesForDay, getActiveBreaksForDay } from './scheduling.js';
-import { saveSchedule } from './db.js';
+import { saveSchedule, deleteShiftFromSupabase, deleteBreakFromSupabase } from './db.js';
 import { refresh } from './ui-list.js';
+import { renderVueJournee } from './ui-day.js';
 
 // ===================================
 // Save config
@@ -24,51 +25,50 @@ function saveScheduleConfig() {
 // ===================================
 
 /**
- * Calcule le total d'heures disponibles par jour (toutes equipes confondues)
+ * Calcule le total d'heures disponibles par jour pour le shift actif uniquement.
  */
 function calculateHoursPerDay() {
-    const result = {};
-
-    DAYS_OF_WEEK.forEach(day => {
-        const ranges = getAvailableRangesForDay(day);
-        let totalHours = 0;
-
-        ranges.forEach(range => {
-            let hours = range.end - range.start;
-
-            getActiveBreaksForDay(day).forEach(b => {
-                const breakStart = timeStringToDecimal(b.start);
-                const breakEnd = timeStringToDecimal(b.end);
-
-                if (breakStart < range.end && breakEnd > range.start) {
-                    const overlapStart = Math.max(breakStart, range.start);
-                    const overlapEnd = Math.min(breakEnd, range.end);
-                    hours -= (overlapEnd - overlapStart);
-                }
-            });
-
-            totalHours += Math.max(0, hours);
-        });
-
-        if (totalHours > 0) result[day] = totalHours;
-    });
-
-    return result;
+    const filteredConfig = State.currentShiftId
+        ? { ...State.scheduleConfig, shifts: State.scheduleConfig.shifts.filter(s => s.id === State.currentShiftId) }
+        : State.scheduleConfig;
+    return computeHoursPerDay(filteredConfig).dailyHours;
 }
 
 /**
  * Retourne la pause dejeuner principale active (pour compatibilite)
  */
 function getActiveLunchBreak() {
-    const dejeuner = State.scheduleConfig.breaks.find(b => b.active && b.id === 'dejeuner');
-    if (dejeuner) {
+    const activeBreaks = (State.scheduleConfig.breaks || []).filter(b => b.active);
+
+    // Règle 1 : id ou name contient un mot-clé déjeuner/lunch/midi
+    const keywords = ['dejeuner', 'lunch', 'midi'];
+    const normalize = str => (str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const byKeyword = activeBreaks.find(b =>
+        keywords.some(kw => normalize(b.id).includes(kw) || normalize(b.name).includes(kw))
+    );
+    if (byKeyword) {
         return {
-            start: dejeuner.start,
-            end: dejeuner.end,
-            duration: timeStringToDecimal(dejeuner.end) - timeStringToDecimal(dejeuner.start)
+            start: byKeyword.start,
+            end: byKeyword.end,
+            duration: timeStringToDecimal(byKeyword.end) - timeStringToDecimal(byKeyword.start),
+            days: byKeyword.days || []
         };
     }
-    return { start: '12:30', end: '13:00', duration: 0.5 };
+
+    // Règle 2 : pause dont la plage chevauche 12:00-14:00
+    const byTimeRange = activeBreaks.find(b => b.start < '14:00' && b.end > '12:00');
+    if (byTimeRange) {
+        return {
+            start: byTimeRange.start,
+            end: byTimeRange.end,
+            duration: timeStringToDecimal(byTimeRange.end) - timeStringToDecimal(byTimeRange.start),
+            days: byTimeRange.days || []
+        };
+    }
+
+    // Règle 3 : fallback
+    console.warn('⚠️ Aucune pause déjeuner détectée — fallback utilisé');
+    return { start: '12:30', end: '13:00', duration: 0.5, days: [] };
 }
 
 /**
@@ -136,17 +136,34 @@ function buildScheduleConfig() {
 /**
  * Recharge les tableaux d'horaires depuis scheduleConfig.
  * Met à jour State.HOURS_PER_DAY, State.LUNCH_BREAK, State.TOTAL_HOURS_PER_WEEK.
+ * Initialise State.currentShiftId si null ou invalide.
  */
 export function reloadScheduleArrays() {
+    // Valider / initialiser currentShiftId sur le premier shift actif
+    const activeShifts = (State.scheduleConfig.shifts || []).filter(s => s.active);
+    if (!State.currentShiftId || !activeShifts.some(s => s.id === State.currentShiftId)) {
+        State.currentShiftId = activeShifts.length > 0 ? activeShifts[0].id : null;
+        if (!State.currentShiftId) console.warn('[Schedule] Aucun shift actif trouvé');
+    }
+
     State.HOURS_PER_DAY = calculateHoursPerDay();
     State.LUNCH_BREAK = getActiveLunchBreak();
     State.TOTAL_HOURS_PER_WEEK = Object.values(State.HOURS_PER_DAY).reduce((a, b) => a + b, 0);
 
+    // Synchroniser CAPACITY_CONFIG avec les valeurs recalculées
+    if (State.CAPACITY_CONFIG?.normal) {
+        State.CAPACITY_CONFIG.normal.dailyHours = { ...State.HOURS_PER_DAY };
+        State.CAPACITY_CONFIG.normal.weeklyHours = State.TOTAL_HOURS_PER_WEEK;
+    }
+
     console.log('[ScheduleConfig] Arrays recharges:', {
+        currentShiftId: State.currentShiftId,
         HOURS_PER_DAY: State.HOURS_PER_DAY,
         LUNCH_BREAK: State.LUNCH_BREAK,
         TOTAL_HOURS_PER_WEEK: State.TOTAL_HOURS_PER_WEEK
     });
+
+    renderShiftBadge();
 }
 
 // ===================================
@@ -170,12 +187,31 @@ function checkAndUnassignOutOfScheduleOperations() {
                 const slotStart = timeToDecimalHours(slot.heureDebut);
                 const slotEnd = slotStart + slot.duree;
 
-                const isValid = dayConfig.ranges.some(range =>
+                const inShift = dayConfig.ranges.some(range =>
                     slotStart >= range.start && slotEnd <= range.end
                 ) || (slotStart >= dayConfig.start && slotEnd <= dayConfig.overtimeEnd);
 
-                if (!isValid) unassignedCount++;
-                return isValid;
+                if (!inShift) {
+                    unassignedCount++;
+                    return false;
+                }
+
+                // Check slot does not overlap an active break for this day
+                const activeBreaks = (State.scheduleConfig.breaks || []).filter(
+                    b => b.active && b.days && b.days.includes(slot.jour)
+                );
+                const overlapsPause = activeBreaks.some(b => {
+                    const bStart = timeToDecimalHours(b.start);
+                    const bEnd = timeToDecimalHours(b.end);
+                    return slotStart < bEnd && slotEnd > bStart;
+                });
+
+                if (overlapsPause) {
+                    unassignedCount++;
+                    return false;
+                }
+
+                return true;
             });
         });
 
@@ -429,7 +465,7 @@ function saveShiftEdit() {
     refresh();
 }
 
-function deleteShift() {
+async function deleteShift() {
     const shiftId = document.getElementById('shiftEditId').value;
     if (!shiftId) return;
 
@@ -437,6 +473,12 @@ function deleteShift() {
 
     const index = State.scheduleConfig.shifts.findIndex(s => s.id === shiftId);
     if (index !== -1) {
+        const ok = await deleteShiftFromSupabase(shiftId);
+        if (!ok) {
+            Toast.error('Erreur lors de la suppression en base');
+            return;
+        }
+
         State.scheduleConfig.shifts.splice(index, 1);
 
         saveScheduleConfig();
@@ -549,12 +591,13 @@ function saveBreakEdit() {
 
     saveScheduleConfig();
     reloadScheduleArrays();
+    checkAndUnassignOutOfScheduleOperations();
     closeBreakEdit();
     renderScheduleManager();
     refresh();
 }
 
-function deleteBreak() {
+async function deleteBreak() {
     const breakId = document.getElementById('breakEditId').value;
     if (!breakId) return;
 
@@ -562,10 +605,13 @@ function deleteBreak() {
 
     const index = State.scheduleConfig.breaks.findIndex(b => b.id === breakId);
     if (index !== -1) {
+        const ok = await deleteBreakFromSupabase(breakId);
+        if (!ok) { Toast.error('Erreur lors de la suppression en base'); return; }
         State.scheduleConfig.breaks.splice(index, 1);
 
         saveScheduleConfig();
         reloadScheduleArrays();
+        checkAndUnassignOutOfScheduleOperations();
         closeBreakEdit();
         renderScheduleManager();
         refresh();
@@ -672,9 +718,86 @@ export function initScheduleManagerHandlers() {
 }
 
 // ===================================
+// Shift Badge (toolbar)
+// ===================================
+
+/**
+ * Met à jour le badge d'équipe dans la toolbar.
+ * Appelé automatiquement par reloadScheduleArrays().
+ */
+export function renderShiftBadge() {
+    const badge = document.getElementById('shiftSelectorBadge');
+    const nameEl = document.getElementById('shiftBadgeName');
+    if (!badge || !nameEl) return;
+
+    const activeShifts = (State.scheduleConfig.shifts || []).filter(s => s.active);
+    const currentShift = activeShifts.find(s => s.id === State.currentShiftId);
+
+    nameEl.textContent = currentShift ? currentShift.name : 'Aucune équipe';
+
+    const arrowEl = badge.querySelector('.shift-badge-arrow');
+    if (activeShifts.length <= 1) {
+        badge.classList.add('shift-badge-single');
+        if (arrowEl) arrowEl.style.display = 'none';
+    } else {
+        badge.classList.remove('shift-badge-single');
+        if (arrowEl) arrowEl.style.display = '';
+    }
+}
+
+function openShiftDropdown() {
+    const activeShifts = (State.scheduleConfig.shifts || []).filter(s => s.active);
+    if (activeShifts.length <= 1) return;
+
+    const dropdown = document.getElementById('shiftSelectorDropdown');
+    if (!dropdown) return;
+
+    const today = new Date();
+    const dayIndex = today.getDay();
+    const day = (dayIndex >= 1 && dayIndex <= 5) ? DAYS_OF_WEEK[dayIndex - 1] : DAYS_OF_WEEK[0];
+
+    dropdown.innerHTML = activeShifts.map(shift => {
+        const schedule = shift.schedules && shift.schedules[day];
+        const timeLabel = schedule ? `${schedule.start} → ${schedule.end}` : '';
+        const isSelected = shift.id === State.currentShiftId;
+        return `
+            <div class="shift-dropdown-item${isSelected ? ' selected' : ''}"
+                 onclick="window.selectShift('${shift.id}')">
+                <span class="shift-dropdown-check">${isSelected ? '✓' : ''}</span>
+                <span class="shift-dropdown-name">${escapeHtml(shift.name)}</span>
+                ${timeLabel ? `<span class="shift-dropdown-time">${escapeHtml(timeLabel)}</span>` : ''}
+            </div>
+        `;
+    }).join('');
+
+    dropdown.classList.remove('hidden');
+
+    // Fermer sur clic extérieur
+    setTimeout(() => {
+        const handler = (e) => {
+            const wrapper = document.getElementById('shiftSelectorWrapper');
+            if (!wrapper || !wrapper.contains(e.target)) {
+                dropdown.classList.add('hidden');
+                document.removeEventListener('click', handler);
+            }
+        };
+        document.addEventListener('click', handler);
+    }, 0);
+}
+
+function selectShift(shiftId) {
+    State.currentShiftId = shiftId;
+    reloadScheduleArrays();   // recalcule HOURS_PER_DAY + appelle renderShiftBadge()
+    renderVueJournee();       // re-render complet Vue Journée (jours + plages horaires)
+    document.getElementById('shiftSelectorDropdown')?.classList.add('hidden');
+}
+
+// ===================================
 // Window exports for onclick in HTML
 // ===================================
 window.openShiftEdit = openShiftEdit;
 window.closeShiftEdit = closeShiftEdit;
 window.openBreakEdit = openBreakEdit;
 window.closeBreakEdit = closeBreakEdit;
+window.selectShift = selectShift;
+window._shiftBadgeClick = openShiftDropdown;

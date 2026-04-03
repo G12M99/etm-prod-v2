@@ -121,6 +121,100 @@ body {
 }
 
 /* ===================================
+   Shift Badge & Dropdown
+   =================================== */
+
+.hidden {
+    display: none !important;
+}
+
+.shift-selector-wrapper {
+    position: relative;
+}
+
+.shift-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background-color: var(--color-background);
+    border: 1px solid var(--color-border);
+    border-radius: 20px;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    color: var(--color-text);
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+
+.shift-badge:not(.shift-badge-single):hover {
+    background-color: #e9ecef;
+    border-color: var(--color-primary);
+}
+
+.shift-badge-single {
+    cursor: default;
+    opacity: 0.85;
+}
+
+.shift-badge-arrow {
+    font-size: 10px;
+    color: var(--color-text-secondary);
+}
+
+.shift-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 200px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-md);
+    z-index: 1000;
+    overflow: hidden;
+}
+
+.shift-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    transition: background-color 0.1s;
+}
+
+.shift-dropdown-item:hover {
+    background-color: var(--color-background);
+}
+
+.shift-dropdown-item.selected {
+    background-color: #e8f0fe;
+    font-weight: 600;
+}
+
+.shift-dropdown-check {
+    width: 16px;
+    color: var(--color-primary);
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+.shift-dropdown-name {
+    flex: 1;
+    color: var(--color-text);
+}
+
+.shift-dropdown-time {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+}
+
+/* ===================================
    Buttons
    =================================== */
 
@@ -2816,6 +2910,184 @@ body {
     }
 
 }
+
+/* ===================================
+   Print Atelier Mode - Screen: hide container
+   =================================== */
+
+#printAtelierContainer {
+    display: none;
+}
+
+/* ===================================
+   Print Atelier Mode - @media print
+   =================================== */
+
+@media print {
+    /* When atelier mode is active, hide everything except print container */
+    body.print-atelier-mode * {
+        visibility: hidden;
+    }
+    body.print-atelier-mode #printAtelierContainer,
+    body.print-atelier-mode #printAtelierContainer * {
+        visibility: visible;
+    }
+    body.print-atelier-mode #printAtelierContainer {
+        display: block;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+    }
+
+    body.print-atelier-mode {
+        background: white;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+
+/* Atelier print page styles (always defined, only visible in print) */
+.print-page {
+    page-break-after: always;
+    padding: 0;
+    font-family: Arial, sans-serif;
+    font-size: 12pt;
+    color: #000;
+}
+.print-page:last-child {
+    page-break-after: auto;
+}
+
+.print-page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 3px solid #000;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+}
+
+.print-machine-name {
+    font-size: 22pt;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+
+.print-date-info {
+    text-align: right;
+    font-size: 13pt;
+    line-height: 1.5;
+}
+
+.print-full-date {
+    display: block;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.print-week-num {
+    display: block;
+    font-size: 11pt;
+    color: #444;
+}
+
+.print-sys-events {
+    margin-bottom: 10px;
+}
+
+.print-sys-event {
+    background: #fff3cd;
+    border: 1px solid #e0c36a;
+    padding: 6px 12px;
+    margin-bottom: 4px;
+    font-size: 11pt;
+    font-weight: 600;
+}
+
+.print-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+}
+
+.print-table thead th {
+    background: #333;
+    color: #fff;
+    padding: 10px 8px;
+    text-align: left;
+    font-size: 12pt;
+    font-weight: 700;
+    border: 1px solid #333;
+}
+
+.print-table tbody td {
+    padding: 12px 8px;
+    font-size: 12pt;
+    border: 1px solid #ccc;
+    vertical-align: middle;
+    min-height: 2cm;
+}
+
+.print-row-op:nth-child(even) td {
+    background: #f5f5f5;
+}
+
+.print-row-op:nth-child(odd) td {
+    background: #fff;
+}
+
+.print-row-urgent td {
+    background: #fff9e0 !important;
+    font-weight: 600;
+}
+
+.print-row-gap td {
+    text-align: center;
+    font-style: italic;
+    color: #888;
+    background: #f0f0f0;
+    border: 1px dashed #ccc;
+    padding: 8px;
+    font-size: 11pt;
+}
+
+.print-page-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 2px solid #000;
+    padding-top: 8px;
+    font-size: 11pt;
+}
+
+.print-total {
+    font-weight: 700;
+    font-size: 13pt;
+}
+
+.print-page-num {
+    color: #666;
+}
+
+@media print {
+    body.print-atelier-mode .print-page {
+        margin: 0;
+    }
+
+    body.print-atelier-mode .print-table tbody td {
+        line-height: 1.6;
+    }
+
+    body.print-atelier-mode .print-row-urgent td {
+        background: #fff9e0 !important;
+    }
+
+    body.print-atelier-mode .print-sys-event {
+        background: #fff3cd !important;
+    }
+}
+
 /* Enable drop-through on operations when dragging */
 body.dragging-active .operation-slot:not(.dragging) {
     pointer-events: none !important;

@@ -65,66 +65,62 @@ export async function loadCommandes() {
 
     // Fix 1 + 2 : OR entre statut actif (non terminé/livré) et date récente
     // NULL statut inclus explicitement pour ne jamais manquer une nouvelle commande
-    // Fix 3 : limite explicite 2000
-    const { data: commandesData, error: cmdError } = await State.supabaseClient
-        .from('commandes')
-        .select('*')
-        .or(`statut.is.null,statut.not.in.(Livré,Terminé),date_livraison.gte.${cutoffStr}`)
-        .limit(2000);
+    // Fix 5 : pagination par .range() pour contourner le plafond serveur Supabase
+    //         (max_rows=1000 écrase silencieusement tout .limit() supérieur)
+    // Fix 6 : statuts corrigés Livré→Livrée, Terminé→Terminée (orthographe schéma)
+    const PAGE_SIZE = 1000;
+    let commandesData = [];
+    let pageFrom = 0;
+    let continuerChargement = true;
 
-    if (cmdError) throw cmdError;
+    while (continuerChargement) {
+        const { data: pageData, error: pageError } = await State.supabaseClient
+            .from('commandes')
+            .select('*, operations(*, slots(*))')
+            .or(`statut.is.null,statut.not.in.(Livrée,Terminée),date_livraison.gte.${cutoffStr}`)
+            .order('date_livraison', { ascending: false })
+            .range(pageFrom, pageFrom + PAGE_SIZE - 1);
 
-    // Fix 3 : warning si limite atteinte
-    if (commandesData && commandesData.length === 2000) {
-        console.warn('⚠️ Limite de chargement atteinte (2000) — certaines commandes peuvent être absentes');
+        if (pageError) throw pageError;
+
+        commandesData = commandesData.concat(pageData || []);
+        continuerChargement = pageData && pageData.length === PAGE_SIZE;
+        pageFrom += PAGE_SIZE;
     }
+
     if (!commandesData || commandesData.length === 0) {
         State.commandes = [];
         updateSyncIndicator('synced', 'À jour (vide)');
         return;
     }
 
-    const { data: operationsData, error: opError } = await State.supabaseClient
-        .from('operations')
-        .select('*');
-    if (opError) throw opError;
-
-    const { data: slotsData, error: slotError } = await State.supabaseClient
-        .from('slots')
-        .select('*');
-    if (slotError) throw slotError;
-
-    // Reconstruire la structure locale
+    // Reconstruire la structure locale (opérations et slots via join imbriqué)
     State.commandes = commandesData.map(cmd => {
-        const cmdOperations = (operationsData || [])
-            .filter(op => op.commande_id === cmd.id)
-            .map(op => {
-                const opSlots = (slotsData || [])
-                    .filter(slot => slot.operation_id === op.id)
-                    .map(slot => ({
-                        id: slot.id,
-                        machine: slot.machine_name,
-                        duree: parseFloat(slot.duree),
-                        semaine: slot.semaine,
-                        jour: slot.jour,
-                        heureDebut: slot.heure_debut,
-                        heureFin: slot.heure_fin,
-                        dateDebut: slot.date_debut,
-                        dateFin: slot.date_fin,
-                        overtime: slot.overtime
-                    }));
-                return {
-                    id: op.id,
-                    type: op.type,
-                    dureeTotal: parseFloat(op.duree_total),
-                    dureeOriginal: parseFloat(op.duree_original),
-                    dureeOverride: op.duree_override ? parseFloat(op.duree_override) : null,
-                    overrideTimestamp: op.override_timestamp,
-                    progressionReelle: parseFloat(op.progression_reelle),
-                    statut: op.statut,
-                    slots: opSlots
-                };
-            });
+        const cmdOperations = (cmd.operations || []).map(op => {
+            const opSlots = (op.slots || []).map(slot => ({
+                id: slot.id,
+                machine: slot.machine_name,
+                duree: parseFloat(slot.duree) || 0,
+                semaine: slot.semaine,
+                jour: slot.jour,
+                heureDebut: slot.heure_debut,
+                heureFin: slot.heure_fin,
+                dateDebut: slot.date_debut,
+                dateFin: slot.date_fin,
+                overtime: slot.overtime
+            }));
+            return {
+                id: op.id,
+                type: op.type,
+                dureeTotal: parseFloat(op.duree_total) || 0,
+                dureeOriginal: parseFloat(op.duree_original) || 0,
+                dureeOverride: op.duree_override ? parseFloat(op.duree_override) : null,
+                overrideTimestamp: op.override_timestamp,
+                progressionReelle: parseFloat(op.progression_reelle) || 0,
+                statut: op.statut,
+                slots: opSlots
+            };
+        });
 
         return {
             id: cmd.id,
@@ -132,7 +128,7 @@ export async function loadCommandes() {
             dateLivraison: cmd.date_livraison,
             statut: cmd.statut,
             materiau: cmd.materiau,
-            poids: parseFloat(cmd.poids),
+            poids: parseFloat(cmd.poids) || 0,
             refCdeClient: cmd.ref_cde_client,
             ressource: cmd.ressource,
             semaineAffectee: cmd.semaine_affectee,
